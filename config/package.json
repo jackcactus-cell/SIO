@@ -1,0 +1,15 @@
+{
+  "name": "sio-audit-app",
+  "version": "1.0.0",
+  "description": "Application d'audit SIO avec chatbot intelligent",
+  "scripts": {
+    "dev": "docker-compose -f docker-compose.dev.yml up",
+    "build": "docker-compose build",
+    "start": "docker-compose up",
+    "stop": "docker-compose down",
+    "clean": "docker-compose down -v --rmi all"
+  },
+  "keywords": ["audit", "chatbot", "mongodb", "react", "express"],
+  "author": "",
+  "license": "ISC"
+}

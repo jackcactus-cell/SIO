@@ -1,0 +1,43 @@
+
+# Framework web
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Base de données
+pymongo
+motor
+oracledb
+tenacity
+
+# Cache et sessions
+redis
+python-jose[cryptography]
+passlib[bcrypt]
+
+# NLP et IA
+openai
+spacy
+nltk
+textblob
+scikit-learn
+numpy
+pandas
+
+# Utilitaires
+python-dotenv
+pydantic
+email-validator
+python-dateutil
+pytz
+
+# Logging et monitoring
+loguru
+prometheus-client
+
+# Tests
+pytest
+pytest-asyncio
+
+# CORS et sécurité
+cryptography

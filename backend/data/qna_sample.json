@@ -1,0 +1,36 @@
+[
+  {
+    "question": "Quels sont les utilisateurs les plus actifs ?",
+    "categorie": "Utilisateurs",
+    "champs": ["DBUSERNAME", "ACTION_NAME"],
+    "reponse": "Les utilisateurs les plus actifs sont listés selon le nombre d'actions dans les journaux."
+  },
+  {
+    "question": "Quelles sont les actions les plus fréquentes ?",
+    "categorie": "Actions",
+    "champs": ["ACTION_NAME"],
+    "reponse": "Les actions les plus fréquentes (SELECT, LOGON, ...) sont calculées sur l'ensemble des logs."
+  },
+  {
+    "question": "Quels objets sont les plus accédés ?",
+    "categorie": "Objets",
+    "champs": ["OBJECT_NAME"],
+    "reponse": "Top des objets accédés avec leurs volumes d'accès."
+  },
+  {
+    "question": "Y a-t-il des accès au schéma SYS ?",
+    "categorie": "Sécurité",
+    "champs": ["OBJECT_SCHEMA"],
+    "reponse": "Analyse des accès au schéma système SYS."
+  },
+  {
+    "question": "Quelle est la période couverte par les logs ?",
+    "categorie": "Temps",
+    "champs": ["EVENT_TIMESTAMP"],
+    "reponse": "Première et dernière date/heure détectées dans les journaux."
+  }
+]
+
+
+
+

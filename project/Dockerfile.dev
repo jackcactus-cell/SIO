@@ -1,0 +1,45 @@
+# Image de base optimisée pour le développement
+FROM node:18-alpine
+
+# Installer les dépendances système nécessaires avec git pour certains packages
+RUN apk add --no-cache python3 make g++ git curl
+
+# Créer un utilisateur de développement non-root
+RUN addgroup -g 1001 -S devuser && \
+    adduser -S devuser -G devuser -u 1001
+
+# Créer le répertoire de l'application
+WORKDIR /app
+
+# Optimiser les permissions du dossier
+RUN chown -R devuser:devuser /app
+
+# Passer à l'utilisateur de développement
+USER devuser
+
+# Copier les fichiers de dépendances
+COPY --chown=devuser:devuser package*.json ./
+
+# Installer toutes les dépendances (incluant les devDependencies) avec cache optimisé
+RUN npm install --prefer-offline
+
+# Variables d'environnement pour le développement
+ENV NODE_ENV=development
+ENV VITE_API_URL=http://localhost:4000
+ENV VITE_BACKEND_PY_URL=http://localhost:8000
+ENV VITE_BACKEND_LLM_URL=http://localhost:8001
+
+# Health check pour le développement
+HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:5173/ || exit 1
+
+# Exposer le port de développement de Vite
+EXPOSE 5173
+
+# Labels pour la documentation
+LABEL maintainer="SIO Audit App" \
+      version="1.0.0-dev" \
+      description="Frontend React/Vite pour développement"
+
+# Commande par défaut pour le développement avec hot reload
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"] 

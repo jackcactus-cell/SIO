@@ -1,0 +1,179 @@
+version: '3.8'
+
+services:
+  # Service Frontend Dev (React/Vite avec hot reload)
+  frontend:
+    build:
+      context: ./project
+      dockerfile: Dockerfile.dev
+    container_name: sio_frontend_dev
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./project:/app
+      - frontend_node_modules:/app/node_modules
+    environment:
+      - NODE_ENV=development
+      - VITE_API_URL=http://localhost:4000
+      - VITE_BACKEND_PY_URL=http://localhost:8000
+      - VITE_BACKEND_LLM_URL=http://localhost:8001
+      - CHOKIDAR_USEPOLLING=true
+    depends_on:
+      backend:
+        condition: service_healthy
+      backend_python:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+
+  # Service Backend Dev (Node.js avec hot reload)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: sio_backend_node_dev
+    ports:
+      - "4000:4000"
+      - "9229:9229"  # Port de débogage Node.js
+    volumes:
+      - ./backend:/app
+      - backend_node_modules:/app/node_modules
+      - backend_logs_dev:/app/logs
+    environment:
+      - NODE_ENV=development
+      - MONGODB_URI=mongodb://mongodb:27017/audit_146_dev
+      - DEBUG=app:*
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  # Service Backend Python Dev (FastAPI + Oracle)
+  backend_python:
+    build:
+      context: ./backend_python
+      dockerfile: Dockerfile
+    container_name: sio_backend_python_dev
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend_python/.env
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      - ENVIRONMENT=development
+      - RELOAD=true
+    volumes:
+      - ./backend_python:/app
+      - python_logs_dev:/app/logs
+      - python_cache_dev:/app/cache
+    networks:
+      - app-network
+    restart: unless-stopped
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Service LLM Dev (Analyse intelligente avec développement)
+  backend_llm:
+    build:
+      context: ./backend/llm-prototype
+      dockerfile: Dockerfile
+    container_name: sio_backend_llm_dev
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./backend/llm-prototype:/app
+      - llm_data_dev:/app/chroma_db
+      - llm_logs_dev:/app/logs
+      - llm_uploads_dev:/app/uploads
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      - MONGODB_URI=mongodb://mongodb:27017/audit_146_dev
+      - ORACLE_HOST=${ORACLE_HOST:-oracle}
+      - ORACLE_PORT=${ORACLE_PORT:-1521}
+      - ORACLE_SERVICE_NAME=${ORACLE_SERVICE_NAME:-XE}
+      - ORACLE_USERNAME=${ORACLE_USERNAME:-audit_user}
+      - ORACLE_PASSWORD=${ORACLE_PASSWORD:-password}
+      - AUTO_EXTRACT_ORACLE=${AUTO_EXTRACT_ORACLE:-false}
+      - EXTRACT_ON_START=${EXTRACT_ON_START:-false}
+      - EXTRACTION_INTERVAL_HOURS=${EXTRACTION_INTERVAL_HOURS:-6}
+      - EXTRACTION_DAYS_BACK=${EXTRACTION_DAYS_BACK:-1}
+      - AUDIT_TYPES=${AUDIT_TYPES:-all}
+      - LOG_LEVEL=DEBUG
+      - ENVIRONMENT=development
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  # Service MongoDB pour développement
+  mongodb:
+    image: mongo:7-jammy
+    container_name: sio_mongodb_dev
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=devpassword123
+      - MONGO_INITDB_DATABASE=audit_146_dev
+    volumes:
+      - mongodb_data_dev:/data/db
+      - mongodb_config_dev:/data/configdb
+      - ./backend/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Service Adminer pour gestion MongoDB (optionnel)
+  adminer:
+    image: adminer:latest
+    container_name: sio_adminer_dev
+    ports:
+      - "8080:8080"
+    environment:
+      - ADMINER_DEFAULT_SERVER=mongodb
+    networks:
+      - app-network
+    restart: unless-stopped
+    profiles:
+      - tools
+
+networks:
+  app-network:
+    driver: bridge
+    name: sio_network_dev
+
+volumes:
+  mongodb_data_dev:
+    name: sio_mongodb_data_dev
+  mongodb_config_dev:
+    name: sio_mongodb_config_dev
+  frontend_node_modules:
+    name: sio_frontend_node_modules_dev
+  backend_node_modules:
+    name: sio_backend_node_modules_dev
+  backend_logs_dev:
+    name: sio_backend_logs_dev
+  python_logs_dev:
+    name: sio_python_logs_dev
+  python_cache_dev:
+    name: sio_python_cache_dev
+  llm_data_dev:
+    name: sio_llm_data_dev
+  llm_logs_dev:
+    name: sio_llm_logs_dev
+  llm_uploads_dev:
+    name: sio_llm_uploads_dev 

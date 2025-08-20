@@ -1,0 +1,147 @@
+version: '3.8'
+
+services:
+  # Service Frontend (React/Vite + Nginx)
+  frontend:
+    build:
+      context: ./project
+      dockerfile: Dockerfile
+    container_name: sio_frontend_prod
+    ports:
+      - "80:80"
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      backend:
+        condition: service_healthy
+      backend_python:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Service Backend Node.js
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sio_backend_node_prod
+    ports:
+      - "4000:4000"
+    environment:
+      - NODE_ENV=production
+      - MONGODB_URI=mongodb://mongodb:27017/audit_146
+      - PORT=4000
+    volumes:
+      - backend_data:/app/data
+      - backend_logs:/app/logs
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  # Service Backend Python (Oracle + FastAPI)
+  backend_python:
+    build:
+      context: ./backend_python
+      dockerfile: Dockerfile
+    container_name: sio_backend_python_prod
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend_python/.env
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - python_logs:/app/logs
+      - python_cache:/app/cache
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  # Service LLM (Analyse intelligente)
+  backend_llm:
+    build:
+      context: ./backend/llm-prototype
+      dockerfile: Dockerfile
+    container_name: sio_backend_llm_prod
+    ports:
+      - "8001:8001"
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      - MONGODB_URI=mongodb://mongodb:27017
+      - ORACLE_HOST=${ORACLE_HOST:-oracle}
+      - ORACLE_PORT=${ORACLE_PORT:-1521}
+      - ORACLE_SERVICE_NAME=${ORACLE_SERVICE_NAME:-XE}
+      - ORACLE_USERNAME=${ORACLE_USERNAME:-audit_user}
+      - ORACLE_PASSWORD=${ORACLE_PASSWORD:-password}
+      - LOG_LEVEL=INFO
+    volumes:
+      - llm_data:/app/chroma_db
+      - llm_logs:/app/logs
+      - llm_uploads:/app/uploads
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  # Service MongoDB
+  mongodb:
+    image: mongo:7-jammy
+    container_name: sio_mongodb_prod
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=securepassword123
+      - MONGO_INITDB_DATABASE=audit_146
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+      - ./backend/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+networks:
+  app-network:
+    driver: bridge
+    name: sio_network
+
+volumes:
+  mongodb_data:
+    name: sio_mongodb_data
+  mongodb_config:
+    name: sio_mongodb_config
+  backend_data:
+    name: sio_backend_data
+  backend_logs:
+    name: sio_backend_logs
+  python_logs:
+    name: sio_python_logs
+  python_cache:
+    name: sio_python_cache
+  llm_data:
+    name: sio_llm_data
+  llm_logs:
+    name: sio_llm_logs
+  llm_uploads:
+    name: sio_llm_uploads 
