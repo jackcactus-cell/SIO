@@ -1,59 +1,56 @@
 #!/bin/bash
 
-# =================================================================
-# SIO Audit App - Script d'arrêt
-# =================================================================
+# Script d'Arrêt SIO
+# Auteur: Assistant IA
 
 set -e
 
 # Couleurs
 GREEN='\033[0;32m'
-BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
+BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Configuration
-DEFAULT_ENV="production"
-ENV=${1:-$DEFAULT_ENV}
+print_info() {
+    echo -e "${GREEN}✅ $1${NC}"
+}
 
-# Fichiers de configuration
-if [ "$ENV" = "dev" ] || [ "$ENV" = "development" ]; then
-    COMPOSE_FILE="docker-compose.dev.yml"
-    ENV_NAME="développement"
-else
-    COMPOSE_FILE="docker-compose.yml"
-    ENV_NAME="production"
-fi
+print_warning() {
+    echo -e "${YELLOW}⚠️  $1${NC}"
+}
 
-echo -e "${BLUE}======================================${NC}"
-echo -e "${BLUE}  SIO Audit App - Arrêt${NC}"
-echo -e "${BLUE}======================================${NC}"
-echo ""
+print_error() {
+    echo -e "${RED}❌ $1${NC}"
+}
+
+print_header() {
+    echo -e "${BLUE}📋 $1${NC}"
+    echo "============================================="
+}
 
 # Fonction d'aide
 show_help() {
-    echo "Usage: $0 [environment] [options]"
-    echo ""
-    echo "Environments:"
-    echo "  production (default) - Mode production"
-    echo "  dev                  - Mode développement"
+    echo "Usage: $0 [options]"
     echo ""
     echo "Options:"
-    echo "  --volumes, -v        - Supprimer aussi les volumes de données"
-    echo "  --force, -f          - Forcer l'arrêt sans confirmation"
-    echo "  --help, -h           - Afficher cette aide"
+    echo "  --force, -f           - Forcer l'arrêt (kill)"
+    echo "  --volumes, -v         - Supprimer aussi les volumes"
+    echo "  --images, -i          - Supprimer aussi les images"
+    echo "  --all, -a             - Arrêt complet (volumes + images)"
+    echo "  --help, -h            - Afficher cette aide"
     echo ""
     echo "Exemples:"
-    echo "  $0                   # Arrêt simple en production"
-    echo "  $0 dev               # Arrêt en développement"
-    echo "  $0 --volumes         # Arrêt avec suppression des volumes"
-    echo "  $0 dev --force       # Arrêt forcé en développement"
+    echo "  $0                    # Arrêt normal"
+    echo "  $0 --force            # Forcer l'arrêt"
+    echo "  $0 --volumes          # Arrêter et supprimer les volumes"
+    echo "  $0 --all              # Arrêt complet"
 }
 
-# Variables pour les options
+# Variables
+FORCE=false
 REMOVE_VOLUMES=false
-FORCE_STOP=false
+REMOVE_IMAGES=false
 
 # Traitement des arguments
 while [[ $# -gt 0 ]]; do
@@ -62,192 +59,213 @@ while [[ $# -gt 0 ]]; do
             show_help
             exit 0
             ;;
+        --force|-f)
+            FORCE=true
+            shift
+            ;;
         --volumes|-v)
             REMOVE_VOLUMES=true
             shift
             ;;
-        --force|-f)
-            FORCE_STOP=true
+        --images|-i)
+            REMOVE_IMAGES=true
             shift
             ;;
-        dev|development|prod|production)
-            ENV=$1
-            if [ "$ENV" = "dev" ] || [ "$ENV" = "development" ]; then
-                COMPOSE_FILE="docker-compose.dev.yml"
-                ENV_NAME="développement"
-            else
-                COMPOSE_FILE="docker-compose.yml"
-                ENV_NAME="production"
-            fi
+        --all|-a)
+            REMOVE_VOLUMES=true
+            REMOVE_IMAGES=true
             shift
             ;;
         *)
-            echo -e "${RED}Option inconnue: $1${NC}"
+            print_error "Option inconnue: $1"
             show_help
             exit 1
             ;;
     esac
 done
 
-# Vérification de Docker
+# Vérifications
 if ! command -v docker &> /dev/null; then
-    echo -e "${RED}❌ Docker n'est pas installé${NC}"
+    print_error "Docker n'est pas installé"
     exit 1
 fi
 
 if ! command -v docker-compose &> /dev/null; then
-    echo -e "${RED}❌ Docker Compose n'est pas installé${NC}"
+    print_error "Docker Compose n'est pas installé"
     exit 1
 fi
 
-# Vérification du fichier compose
-if [ ! -f "$COMPOSE_FILE" ]; then
-    echo -e "${RED}❌ Fichier $COMPOSE_FILE introuvable${NC}"
+if [ ! -f "config/docker/docker-compose.yml" ]; then
+    print_error "Fichier docker-compose.yml non trouvé"
     exit 1
 fi
 
 # Vérifier si des services sont en cours d'exécution
-echo -e "${YELLOW}1. Vérification de l'état des services...${NC}"
-
-RUNNING_SERVICES=$(docker-compose -f $COMPOSE_FILE ps --services --filter "status=running" 2>/dev/null || echo "")
-
-if [ -z "$RUNNING_SERVICES" ]; then
-    echo -e "${GREEN}✅ Aucun service en cours d'exécution${NC}"
-    echo "Rien à arrêter."
-    exit 0
-fi
-
-echo -e "${BLUE}Services en cours d'exécution :${NC}"
-docker-compose -f $COMPOSE_FILE ps
-
-# Demander confirmation si pas de force
-if [ "$FORCE_STOP" = false ]; then
-    echo ""
-    echo -e "${YELLOW}Environnement : $ENV_NAME${NC}"
-    if [ "$REMOVE_VOLUMES" = true ]; then
-        echo -e "${RED}⚠️  ATTENTION: Les volumes de données seront supprimés !${NC}"
-        echo -e "${RED}   Cela effacera toutes les données de la base de données.${NC}"
+check_running_services() {
+    local running_services=$(docker-compose -f config/docker/docker-compose.yml ps --services --filter "status=running" 2>/dev/null || echo "")
+    if [ -z "$running_services" ]; then
+        print_warning "Aucun service SIO n'est en cours d'exécution"
+        return 1
     fi
-    echo ""
-    read -p "Voulez-vous vraiment arrêter l'application ? (y/N): " confirm
+    return 0
+}
+
+# Arrêter les services
+stop_services() {
+    print_header "Arrêt des Services"
     
-    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
-        echo -e "${BLUE}Arrêt annulé.${NC}"
+    if [ "$FORCE" = true ]; then
+        print_step "Arrêt forcé des conteneurs"
+        docker-compose -f config/docker/docker-compose.yml kill 2>/dev/null || true
+    else
+        print_step "Arrêt gracieux des conteneurs"
+        docker-compose -f config/docker/docker-compose.yml stop 2>/dev/null || true
+    fi
+    
+    print_step "Suppression des conteneurs"
+    docker-compose -f config/docker/docker-compose.yml down 2>/dev/null || true
+    
+    print_info "Services arrêtés"
+}
+
+# Supprimer les volumes si demandé
+remove_volumes() {
+    if [ "$REMOVE_VOLUMES" = true ]; then
+        print_header "Suppression des Volumes"
+        
+        print_step "Suppression des volumes SIO"
+        docker volume rm sio_mongodb_data sio_backend_data sio_python_logs sio_python_cache 2>/dev/null || true
+        
+        print_info "Volumes supprimés"
+    fi
+}
+
+# Supprimer les images si demandé
+remove_images() {
+    if [ "$REMOVE_IMAGES" = true ]; then
+        print_header "Suppression des Images"
+        
+        print_step "Suppression des images SIO"
+        docker rmi sio-frontend:latest sio-backend-node:latest sio-backend-python:latest sio-backend-llm:latest 2>/dev/null || true
+        
+        print_info "Images supprimées"
+    fi
+}
+
+# Nettoyer les ressources Docker
+cleanup_docker() {
+    print_header "Nettoyage Docker"
+    
+    print_step "Suppression des conteneurs arrêtés"
+    docker container prune -f 2>/dev/null || true
+    
+    print_step "Suppression des réseaux non utilisés"
+    docker network prune -f 2>/dev/null || true
+    
+    if [ "$REMOVE_VOLUMES" = true ]; then
+        print_step "Suppression des volumes non utilisés"
+        docker volume prune -f 2>/dev/null || true
+    fi
+    
+    print_info "Nettoyage terminé"
+}
+
+# Vérifier l'état final
+verify_stop() {
+    print_header "Vérification de l'Arrêt"
+    
+    local running_services=$(docker-compose -f config/docker/docker-compose.yml ps --services --filter "status=running" 2>/dev/null || echo "")
+    
+    if [ -z "$running_services" ]; then
+        print_info "Tous les services SIO sont arrêtés"
+    else
+        print_warning "Certains services sont encore en cours d'exécution:"
+        echo "$running_services" | while read -r service; do
+            if [ -n "$service" ]; then
+                echo "  • $service"
+            fi
+        done
+    fi
+    
+    # Vérifier les ports
+    echo ""
+    print_step "Vérification des ports"
+    
+    local ports=(80 4000 8000 8001 27017)
+    for port in "${ports[@]}"; do
+        if netstat -tulpn 2>/dev/null | grep -q ":$port "; then
+            print_warning "Port $port encore utilisé"
+        else
+            print_info "Port $port libre"
+        fi
+    done
+}
+
+# Affichage des informations finales
+show_final_info() {
+    print_header "Arrêt Terminé"
+    
+    echo -e "${GREEN}🎉 Vos services SIO ont été arrêtés !${NC}"
+    echo ""
+    
+    if [ "$REMOVE_VOLUMES" = true ]; then
+        echo -e "${YELLOW}⚠️  ATTENTION : Les volumes ont été supprimés${NC}"
+        echo "   Les données MongoDB ont été perdues"
+    fi
+    
+    if [ "$REMOVE_IMAGES" = true ]; then
+        echo -e "${YELLOW}⚠️  ATTENTION : Les images ont été supprimées${NC}"
+        echo "   Vous devrez les reconstruire au prochain démarrage"
+    fi
+    
+    echo ""
+    echo -e "${PURPLE}🔧 Commandes utiles :${NC}"
+    echo "   ./scripts/start.sh    # Redémarrer les services"
+    echo "   ./scripts/status.sh   # Vérifier l'état"
+    echo "   docker ps             # Voir tous les conteneurs"
+    echo "   docker volume ls      # Voir les volumes"
+    echo "   docker image ls       # Voir les images"
+}
+
+# Fonction principale
+main() {
+    echo -e "${BLUE}🛑 Arrêt des Services SIO${NC}"
+    echo "============================================="
+    echo ""
+    
+    # Vérifier si des services sont en cours d'exécution
+    if ! check_running_services; then
+        print_info "Aucun service à arrêter"
         exit 0
     fi
-fi
-
-# Sauvegarde automatique avant arrêt (si en production et si les volumes doivent être supprimés)
-if [ "$REMOVE_VOLUMES" = true ] && [ "$ENV" != "dev" ] && [ "$ENV" != "development" ]; then
-    echo -e "${YELLOW}2. Sauvegarde automatique avant suppression des données...${NC}"
     
-    BACKUP_DIR="backup/$(date +%Y%m%d_%H%M%S)_before_stop"
-    mkdir -p "$BACKUP_DIR"
-    
-    # Sauvegarde MongoDB si possible
-    if docker-compose -f $COMPOSE_FILE ps | grep -q "mongodb.*Up"; then
-        echo -e "${YELLOW}   Sauvegarde de MongoDB...${NC}"
-        if docker-compose -f $COMPOSE_FILE exec -T mongodb mongodump --out /tmp/backup_stop 2>/dev/null; then
-            docker-compose -f $COMPOSE_FILE cp mongodb:/tmp/backup_stop "$BACKUP_DIR/" 2>/dev/null || true
-            echo -e "${GREEN}   ✅ Sauvegarde MongoDB créée dans $BACKUP_DIR${NC}"
-        else
-            echo -e "${YELLOW}   ⚠️  Impossible de sauvegarder MongoDB${NC}"
+    # Confirmation pour les actions destructives
+    if [ "$REMOVE_VOLUMES" = true ] || [ "$REMOVE_IMAGES" = true ]; then
+        echo -e "${YELLOW}⚠️  ATTENTION : Actions destructives demandées${NC}"
+        if [ "$REMOVE_VOLUMES" = true ]; then
+            echo "   - Suppression des volumes (données perdues)"
+        fi
+        if [ "$REMOVE_IMAGES" = true ]; then
+            echo "   - Suppression des images"
+        fi
+        echo ""
+        read -p "Êtes-vous sûr de vouloir continuer ? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            print_info "Arrêt annulé"
+            exit 0
         fi
     fi
-else
-    echo -e "${YELLOW}2. Arrêt des services...${NC}"
-fi
+    
+    stop_services
+    remove_volumes
+    remove_images
+    cleanup_docker
+    verify_stop
+    show_final_info
+}
 
-# Arrêt gracieux des services
-echo -e "${YELLOW}   Envoi du signal d'arrêt aux services...${NC}"
-
-# Arrêter d'abord les services frontend pour éviter de nouvelles requêtes
-if echo "$RUNNING_SERVICES" | grep -q "frontend"; then
-    echo -e "${BLUE}   🛑 Arrêt du frontend...${NC}"
-    docker-compose -f $COMPOSE_FILE stop frontend
-fi
-
-# Ensuite les backends
-for service in backend backend_python backend_llm; do
-    if echo "$RUNNING_SERVICES" | grep -q "$service"; then
-        echo -e "${BLUE}   🛑 Arrêt du $service...${NC}"
-        docker-compose -f $COMPOSE_FILE stop $service
-    fi
-done
-
-# Enfin la base de données
-if echo "$RUNNING_SERVICES" | grep -q "mongodb"; then
-    echo -e "${BLUE}   🛑 Arrêt de MongoDB...${NC}"
-    docker-compose -f $COMPOSE_FILE stop mongodb
-fi
-
-# Arrêter tous les autres services restants
-echo -e "${BLUE}   🛑 Arrêt des services restants...${NC}"
-docker-compose -f $COMPOSE_FILE stop
-
-# Supprimer les conteneurs
-echo -e "${YELLOW}3. Suppression des conteneurs...${NC}"
-
-if [ "$REMOVE_VOLUMES" = true ]; then
-    docker-compose -f $COMPOSE_FILE down -v --remove-orphans
-    echo -e "${GREEN}   ✅ Conteneurs et volumes supprimés${NC}"
-else
-    docker-compose -f $COMPOSE_FILE down --remove-orphans
-    echo -e "${GREEN}   ✅ Conteneurs supprimés (volumes conservés)${NC}"
-fi
-
-# Nettoyage optionnel
-echo -e "${YELLOW}4. Nettoyage...${NC}"
-
-# Supprimer les réseaux orphelins
-docker network prune -f > /dev/null 2>&1 || true
-
-# Supprimer les images inutilisées (si demandé)
-if [ "$FORCE_STOP" = true ]; then
-    echo -e "${YELLOW}   Suppression des images inutilisées...${NC}"
-    docker image prune -f > /dev/null 2>&1 || true
-fi
-
-echo -e "${GREEN}   ✅ Nettoyage terminé${NC}"
-
-# Vérification finale
-echo -e "${YELLOW}5. Vérification finale...${NC}"
-
-REMAINING_CONTAINERS=$(docker-compose -f $COMPOSE_FILE ps -q 2>/dev/null || echo "")
-
-if [ -z "$REMAINING_CONTAINERS" ]; then
-    echo -e "${GREEN}   ✅ Tous les conteneurs sont arrêtés${NC}"
-else
-    echo -e "${YELLOW}   ⚠️  Quelques conteneurs persistent :${NC}"
-    docker-compose -f $COMPOSE_FILE ps
-fi
-
-# Résumé final
-echo ""
-echo -e "${GREEN}======================================${NC}"
-echo -e "${GREEN}  ✅ Arrêt terminé${NC}"
-echo -e "${GREEN}======================================${NC}"
-echo ""
-
-echo -e "${BLUE}📊 Résumé :${NC}"
-echo "   Environnement:      $ENV_NAME"
-echo "   Volumes supprimés:  $([ "$REMOVE_VOLUMES" = true ] && echo "Oui" || echo "Non")"
-if [ "$REMOVE_VOLUMES" = true ] && [ -n "$BACKUP_DIR" ]; then
-    echo "   Sauvegarde:         $BACKUP_DIR"
-fi
-
-echo ""
-echo -e "${BLUE}🔄 Pour redémarrer :${NC}"
-echo "   ./scripts/start.sh $ENV"
-
-echo ""
-echo -e "${GREEN}🎯 Application SIO Audit arrêtée avec succès !${NC}"
-
-# Affichage des ressources libérées
-if command -v docker &> /dev/null; then
-    echo ""
-    echo -e "${BLUE}💾 Espace Docker après arrêt :${NC}"
-    docker system df
-fi
+# Exécution du script
+main "$@"
 
 

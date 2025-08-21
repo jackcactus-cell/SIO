@@ -1,67 +1,59 @@
 #!/bin/bash
 
-# =================================================================
-# SIO Audit App - Script de sauvegarde
-# =================================================================
+# Script de Sauvegarde SIO
+# Auteur: Assistant IA
 
 set -e
 
 # Couleurs
 GREEN='\033[0;32m'
-BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
+BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# Configuration
-DEFAULT_ENV="production"
-ENV=${1:-$DEFAULT_ENV}
-BACKUP_TYPE="full"
-COMPRESSION=true
-UPLOAD_S3=false
+print_info() {
+    echo -e "${GREEN}✅ $1${NC}"
+}
 
-# Fichiers de configuration
-if [ "$ENV" = "dev" ] || [ "$ENV" = "development" ]; then
-    COMPOSE_FILE="docker-compose.dev.yml"
-    ENV_NAME="développement"
-    DB_NAME="audit_146_dev"
-else
-    COMPOSE_FILE="docker-compose.yml"
-    ENV_NAME="production"
-    DB_NAME="audit_146"
-fi
+print_warning() {
+    echo -e "${YELLOW}⚠️  $1${NC}"
+}
 
-# Dossiers
-BACKUP_ROOT="backup"
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-BACKUP_DIR="$BACKUP_ROOT/${ENV}_${TIMESTAMP}"
+print_error() {
+    echo -e "${RED}❌ $1${NC}"
+}
+
+print_header() {
+    echo -e "${BLUE}📋 $1${NC}"
+    echo "============================================="
+}
+
+print_step() {
+    echo -e "${CYAN}🔧 $1${NC}"
+}
 
 # Fonction d'aide
 show_help() {
-    echo "Usage: $0 [environment] [options]"
-    echo ""
-    echo "Environments:"
-    echo "  production (default) - Mode production"
-    echo "  dev                  - Mode développement"
-    echo ""
-    echo "Types de sauvegarde:"
-    echo "  --full               - Sauvegarde complète (défaut)"
-    echo "  --mongodb-only       - Seulement MongoDB"
-    echo "  --volumes-only       - Seulement les volumes"
-    echo "  --logs-only          - Seulement les logs"
+    echo "Usage: $0 [options]"
     echo ""
     echo "Options:"
-    echo "  --no-compression     - Pas de compression"
-    echo "  --upload-s3          - Upload vers S3 (nécessite configuration)"
-    echo "  --help, -h           - Afficher cette aide"
+    echo "  --full, -f            - Sauvegarde complète (MongoDB + volumes)"
+    echo "  --mongodb, -m         - Sauvegarde MongoDB uniquement"
+    echo "  --volumes, -v         - Sauvegarde des volumes uniquement"
+    echo "  --compress, -c        - Compresser la sauvegarde"
+    echo "  --help, -h            - Afficher cette aide"
     echo ""
     echo "Exemples:"
-    echo "  $0                   # Sauvegarde complète en production"
-    echo "  $0 dev               # Sauvegarde complète en développement"
-    echo "  $0 --mongodb-only    # Seulement la base de données"
-    echo "  $0 prod --upload-s3  # Sauvegarde avec upload S3"
+    echo "  $0                    # Sauvegarde automatique"
+    echo "  $0 --full             # Sauvegarde complète"
+    echo "  $0 --mongodb --compress  # MongoDB compressé"
 }
+
+# Variables
+BACKUP_TYPE="auto"
+COMPRESS=false
 
 # Traitement des arguments
 while [[ $# -gt 0 ]]; do
@@ -70,341 +62,260 @@ while [[ $# -gt 0 ]]; do
             show_help
             exit 0
             ;;
-        --full)
+        --full|-f)
             BACKUP_TYPE="full"
             shift
             ;;
-        --mongodb-only)
+        --mongodb|-m)
             BACKUP_TYPE="mongodb"
             shift
             ;;
-        --volumes-only)
+        --volumes|-v)
             BACKUP_TYPE="volumes"
             shift
             ;;
-        --logs-only)
-            BACKUP_TYPE="logs"
-            shift
-            ;;
-        --no-compression)
-            COMPRESSION=false
-            shift
-            ;;
-        --upload-s3)
-            UPLOAD_S3=true
-            shift
-            ;;
-        dev|development|prod|production)
-            ENV=$1
-            if [ "$ENV" = "dev" ] || [ "$ENV" = "development" ]; then
-                COMPOSE_FILE="docker-compose.dev.yml"
-                ENV_NAME="développement"
-                DB_NAME="audit_146_dev"
-            else
-                COMPOSE_FILE="docker-compose.yml"
-                ENV_NAME="production"
-                DB_NAME="audit_146"
-            fi
+        --compress|-c)
+            COMPRESS=true
             shift
             ;;
         *)
-            echo -e "${RED}Option inconnue: $1${NC}"
+            print_error "Option inconnue: $1"
             show_help
             exit 1
             ;;
     esac
 done
 
-echo -e "${BLUE}======================================${NC}"
-echo -e "${BLUE}  SIO Audit App - Sauvegarde${NC}"
-echo -e "${BLUE}======================================${NC}"
-echo ""
-
-# Vérification de Docker
+# Vérifications
 if ! command -v docker &> /dev/null; then
-    echo -e "${RED}❌ Docker n'est pas installé${NC}"
+    print_error "Docker n'est pas installé"
     exit 1
 fi
 
 if ! command -v docker-compose &> /dev/null; then
-    echo -e "${RED}❌ Docker Compose n'est pas installé${NC}"
+    print_error "Docker Compose n'est pas installé"
     exit 1
-fi
-
-# Vérification du fichier compose
-if [ ! -f "$COMPOSE_FILE" ]; then
-    echo -e "${RED}❌ Fichier $COMPOSE_FILE introuvable${NC}"
-    exit 1
-fi
-
-# Affichage de la configuration
-echo -e "${CYAN}💾 Configuration de la sauvegarde:${NC}"
-echo "   Environnement:      $ENV_NAME"
-echo "   Type:               $BACKUP_TYPE"
-echo "   Compression:        $([ "$COMPRESSION" = true ] && echo "Oui" || echo "Non")"
-echo "   Upload S3:          $([ "$UPLOAD_S3" = true ] && echo "Oui" || echo "Non")"
-echo "   Dossier:            $BACKUP_DIR"
-echo ""
-
-# Vérifier l'état des services
-echo -e "${YELLOW}1. Vérification de l'état des services...${NC}"
-
-RUNNING_SERVICES=$(docker-compose -f $COMPOSE_FILE ps --services --filter "status=running" 2>/dev/null || echo "")
-
-if [ -z "$RUNNING_SERVICES" ]; then
-    echo -e "${YELLOW}⚠️  Aucun service en cours d'exécution${NC}"
-    echo "Certaines sauvegardes peuvent être limitées."
-else
-    echo -e "${GREEN}✅ Services actifs détectés${NC}"
 fi
 
 # Créer le dossier de sauvegarde
-echo -e "${YELLOW}2. Préparation du dossier de sauvegarde...${NC}"
+create_backup_dir() {
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local backup_dir="backups/sio_backup_$timestamp"
+    
+    mkdir -p "$backup_dir"
+    echo "$backup_dir"
+}
 
-mkdir -p "$BACKUP_DIR"
-chmod 755 "$BACKUP_DIR"
-
-echo -e "${GREEN}✅ Dossier créé: $BACKUP_DIR${NC}"
-
-# Fonction de sauvegarde MongoDB
+# Sauvegarder MongoDB
 backup_mongodb() {
-    echo -e "${YELLOW}3. Sauvegarde de MongoDB...${NC}"
+    local backup_dir="$1"
     
-    if ! echo "$RUNNING_SERVICES" | grep -q "mongodb"; then
-        echo -e "${RED}❌ MongoDB n'est pas en cours d'exécution${NC}"
-        return 1
-    fi
+    print_step "Sauvegarde de MongoDB"
     
-    local mongo_backup_dir="$BACKUP_DIR/mongodb"
-    mkdir -p "$mongo_backup_dir"
-    
-    echo -e "${BLUE}   📦 Dump de la base de données $DB_NAME...${NC}"
-    
-    # Dump de la base de données
-    if docker-compose -f $COMPOSE_FILE exec -T mongodb mongodump --db $DB_NAME --out /tmp/backup_$TIMESTAMP; then
-        # Copier le dump depuis le conteneur
-        docker-compose -f $COMPOSE_FILE cp mongodb:/tmp/backup_$TIMESTAMP "$mongo_backup_dir/"
+    if docker ps | grep -q "sio_mongodb_prod"; then
+        # Créer le dossier de sauvegarde MongoDB
+        mkdir -p "$backup_dir/mongodb"
         
-        # Nettoyer le conteneur
-        docker-compose -f $COMPOSE_FILE exec -T mongodb rm -rf /tmp/backup_$TIMESTAMP
-        
-        echo -e "${GREEN}   ✅ Sauvegarde MongoDB réussie${NC}"
-        
-        # Informations sur la sauvegarde
-        local backup_size=$(du -sh "$mongo_backup_dir" | cut -f1)
-        echo -e "${CYAN}   📊 Taille: $backup_size${NC}"
-        
-        return 0
-    else
-        echo -e "${RED}   ❌ Échec du dump MongoDB${NC}"
-        return 1
-    fi
-}
-
-# Fonction de sauvegarde des volumes
-backup_volumes() {
-    echo -e "${YELLOW}3. Sauvegarde des volumes Docker...${NC}"
-    
-    local volumes_backup_dir="$BACKUP_DIR/volumes"
-    mkdir -p "$volumes_backup_dir"
-    
-    # Lister les volumes SIO
-    local sio_volumes=$(docker volume ls --format "{{.Name}}" | grep "sio" || echo "")
-    
-    if [ -z "$sio_volumes" ]; then
-        echo -e "${YELLOW}   ⚠️  Aucun volume SIO trouvé${NC}"
-        return 0
-    fi
-    
-    echo -e "${BLUE}   📦 Sauvegarde des volumes:${NC}"
-    
-    for volume in $sio_volumes; do
-        echo -e "${CYAN}      • $volume${NC}"
-        
-        # Créer une archive du volume
-        docker run --rm \
-            -v "$volume":/volume \
-            -v "$(pwd)/$volumes_backup_dir":/backup \
-            busybox tar czf "/backup/${volume}.tar.gz" -C /volume . \
-            2>/dev/null || echo -e "${YELLOW}      ⚠️  Erreur pour $volume${NC}"
-    done
-    
-    echo -e "${GREEN}   ✅ Sauvegarde des volumes terminée${NC}"
-    
-    # Informations sur la sauvegarde
-    local backup_size=$(du -sh "$volumes_backup_dir" | cut -f1)
-    echo -e "${CYAN}   📊 Taille: $backup_size${NC}"
-}
-
-# Fonction de sauvegarde des logs
-backup_logs() {
-    echo -e "${YELLOW}3. Sauvegarde des logs...${NC}"
-    
-    local logs_backup_dir="$BACKUP_DIR/logs"
-    mkdir -p "$logs_backup_dir"
-    
-    # Sauvegarder les logs du système
-    if [ -d "logs" ]; then
-        echo -e "${BLUE}   📦 Copie des logs système...${NC}"
-        cp -r logs/* "$logs_backup_dir/" 2>/dev/null || true
-    fi
-    
-    # Sauvegarder les logs des conteneurs
-    echo -e "${BLUE}   📦 Export des logs des conteneurs...${NC}"
-    
-    for service in frontend backend backend_python backend_llm mongodb; do
-        if echo "$RUNNING_SERVICES" | grep -q "$service"; then
-            echo -e "${CYAN}      • $service${NC}"
-            docker-compose -f $COMPOSE_FILE logs --no-color $service > "$logs_backup_dir/${service}.log" 2>/dev/null || true
-        fi
-    done
-    
-    echo -e "${GREEN}   ✅ Sauvegarde des logs terminée${NC}"
-    
-    # Informations sur la sauvegarde
-    local backup_size=$(du -sh "$logs_backup_dir" | cut -f1)
-    echo -e "${CYAN}   📊 Taille: $backup_size${NC}"
-}
-
-# Fonction de sauvegarde des configurations
-backup_configs() {
-    echo -e "${YELLOW}4. Sauvegarde des configurations...${NC}"
-    
-    local config_backup_dir="$BACKUP_DIR/config"
-    mkdir -p "$config_backup_dir"
-    
-    # Fichiers de configuration importants
-    local config_files=(
-        "docker-compose.yml"
-        "docker-compose.dev.yml"
-        ".env.example"
-        "backend_python/env.example"
-        "project/nginx.conf"
-    )
-    
-    for config_file in "${config_files[@]}"; do
-        if [ -f "$config_file" ]; then
-            echo -e "${CYAN}   📄 $config_file${NC}"
-            cp "$config_file" "$config_backup_dir/" 2>/dev/null || true
-        fi
-    done
-    
-    # Copier les fichiers d'environnement (sans les mots de passe)
-    if [ -f ".env" ]; then
-        echo -e "${CYAN}   📄 .env (sans secrets)${NC}"
-        grep -v -E "(PASSWORD|SECRET|KEY)" .env > "$config_backup_dir/env.sanitized" 2>/dev/null || true
-    fi
-    
-    echo -e "${GREEN}   ✅ Sauvegarde des configurations terminée${NC}"
-}
-
-# Exécution selon le type de sauvegarde
-case $BACKUP_TYPE in
-    "mongodb")
-        backup_mongodb
-        ;;
-    "volumes")
-        backup_volumes
-        ;;
-    "logs")
-        backup_logs
-        ;;
-    "full")
-        backup_mongodb
-        backup_volumes
-        backup_logs
-        backup_configs
-        ;;
-esac
-
-# Compression si demandée
-if [ "$COMPRESSION" = true ]; then
-    echo -e "${YELLOW}5. Compression de la sauvegarde...${NC}"
-    
-    local archive_name="${ENV}_backup_${TIMESTAMP}.tar.gz"
-    local archive_path="$BACKUP_ROOT/$archive_name"
-    
-    echo -e "${BLUE}   🗜️  Création de l'archive: $archive_name${NC}"
-    
-    tar -czf "$archive_path" -C "$BACKUP_ROOT" "${ENV}_${TIMESTAMP}" 2>/dev/null
-    
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}   ✅ Archive créée avec succès${NC}"
-        
-        # Informations sur l'archive
-        local archive_size=$(du -sh "$archive_path" | cut -f1)
-        echo -e "${CYAN}   📊 Taille de l'archive: $archive_size${NC}"
-        
-        # Supprimer le dossier non compressé
-        rm -rf "$BACKUP_DIR"
-        
-        FINAL_BACKUP_PATH="$archive_path"
-    else
-        echo -e "${RED}   ❌ Erreur lors de la compression${NC}"
-        FINAL_BACKUP_PATH="$BACKUP_DIR"
-    fi
-else
-    FINAL_BACKUP_PATH="$BACKUP_DIR"
-fi
-
-# Upload S3 si demandé
-if [ "$UPLOAD_S3" = true ]; then
-    echo -e "${YELLOW}6. Upload vers S3...${NC}"
-    
-    if command -v aws &> /dev/null; then
-        local s3_bucket="${BACKUP_S3_BUCKET:-sio-audit-backups}"
-        local s3_path="s3://$s3_bucket/$(basename $FINAL_BACKUP_PATH)"
-        
-        echo -e "${BLUE}   ☁️  Upload vers: $s3_path${NC}"
-        
-        if aws s3 cp "$FINAL_BACKUP_PATH" "$s3_path"; then
-            echo -e "${GREEN}   ✅ Upload S3 réussi${NC}"
+        # Sauvegarder MongoDB
+        if docker exec sio_mongodb_prod mongodump --out /tmp/mongodb_backup 2>/dev/null; then
+            docker cp sio_mongodb_prod:/tmp/mongodb_backup "$backup_dir/mongodb/"
+            print_info "MongoDB sauvegardé avec succès"
         else
-            echo -e "${RED}   ❌ Échec de l'upload S3${NC}"
+            print_warning "Échec de la sauvegarde MongoDB"
         fi
     else
-        echo -e "${RED}   ❌ AWS CLI non installé${NC}"
+        print_warning "MongoDB n'est pas en cours d'exécution"
     fi
-fi
+}
 
-# Nettoyage des anciennes sauvegardes
-echo -e "${YELLOW}7. Nettoyage des anciennes sauvegardes...${NC}"
+# Sauvegarder les volumes
+backup_volumes() {
+    local backup_dir="$1"
+    
+    print_step "Sauvegarde des volumes"
+    
+    # Créer le dossier de sauvegarde des volumes
+    mkdir -p "$backup_dir/volumes"
+    
+    # Liste des volumes à sauvegarder
+    local volumes=("sio_mongodb_data" "sio_backend_data" "sio_python_logs" "sio_python_cache")
+    
+    for volume in "${volumes[@]}"; do
+        if docker volume ls | grep -q "$volume"; then
+            print_step "Sauvegarde du volume $volume"
+            
+            # Créer un conteneur temporaire pour sauvegarder le volume
+            docker run --rm -v "$volume":/data -v "$backup_dir/volumes":/backup alpine tar czf "/backup/${volume}.tar.gz" -C /data . 2>/dev/null || true
+            
+            if [ -f "$backup_dir/volumes/${volume}.tar.gz" ]; then
+                print_info "Volume $volume sauvegardé"
+            else
+                print_warning "Échec de la sauvegarde du volume $volume"
+            fi
+        else
+            print_warning "Volume $volume non trouvé"
+        fi
+    done
+}
 
-local retention_days=${BACKUP_RETENTION_DAYS:-7}
+# Sauvegarder les fichiers de configuration
+backup_config() {
+    local backup_dir="$1"
+    
+    print_step "Sauvegarde des fichiers de configuration"
+    
+    # Créer le dossier de configuration
+    mkdir -p "$backup_dir/config"
+    
+    # Copier les fichiers de configuration
+    if [ -f ".env" ]; then
+        cp .env "$backup_dir/config/"
+        print_info "Fichier .env sauvegardé"
+    fi
+    
+    if [ -f "backend_python/.env" ]; then
+        cp backend_python/.env "$backup_dir/config/"
+        print_info "Fichier backend_python/.env sauvegardé"
+    fi
+    
+    if [ -f "config/docker/docker-compose.yml" ]; then
+        cp config/docker/docker-compose.yml "$backup_dir/config/"
+        print_info "Fichier docker-compose.yml sauvegardé"
+    fi
+}
 
-echo -e "${BLUE}   🧹 Suppression des sauvegardes > $retention_days jours${NC}"
+# Créer un fichier de métadonnées
+create_metadata() {
+    local backup_dir="$1"
+    
+    print_step "Création des métadonnées"
+    
+    cat > "$backup_dir/metadata.json" << EOF
+{
+    "backup_date": "$(date -Iseconds)",
+    "backup_type": "$BACKUP_TYPE",
+    "compressed": $COMPRESS,
+    "system_info": {
+        "hostname": "$(hostname)",
+        "docker_version": "$(docker --version)",
+        "docker_compose_version": "$(docker-compose --version)"
+    },
+    "services": {
+        "frontend": "$(docker ps --filter "name=sio_frontend_prod" --format "{{.Status}}" 2>/dev/null || echo "Not running")",
+        "backend_node": "$(docker ps --filter "name=sio_backend_node_prod" --format "{{.Status}}" 2>/dev/null || echo "Not running")",
+        "backend_python": "$(docker ps --filter "name=sio_backend_python_prod" --format "{{.Status}}" 2>/dev/null || echo "Not running")",
+        "backend_llm": "$(docker ps --filter "name=sio_backend_llm_prod" --format "{{.Status}}" 2>/dev/null || echo "Not running")",
+        "mongodb": "$(docker ps --filter "name=sio_mongodb_prod" --format "{{.Status}}" 2>/dev/null || echo "Not running")"
+    },
+    "volumes": [
+        $(docker volume ls --filter "name=sio" --format "{{.Name}}" 2>/dev/null | tr '\n' ',' | sed 's/,$//' | sed 's/^/"/' | sed 's/,/","/g' | sed 's/$/"/')
+    ]
+}
+EOF
+    
+    print_info "Métadonnées créées"
+}
 
-find "$BACKUP_ROOT" -name "*backup*" -type f -mtime +$retention_days -delete 2>/dev/null || true
-find "$BACKUP_ROOT" -name "${ENV}_*" -type d -mtime +$retention_days -exec rm -rf {} + 2>/dev/null || true
+# Compresser la sauvegarde
+compress_backup() {
+    local backup_dir="$1"
+    
+    if [ "$COMPRESS" = true ]; then
+        print_step "Compression de la sauvegarde"
+        
+        local parent_dir=$(dirname "$backup_dir")
+        local backup_name=$(basename "$backup_dir")
+        
+        cd "$parent_dir"
+        tar -czf "${backup_name}.tar.gz" "$backup_name" 2>/dev/null
+        
+        if [ -f "${backup_name}.tar.gz" ]; then
+            rm -rf "$backup_name"
+            print_info "Sauvegarde compressée: ${backup_name}.tar.gz"
+            echo "$parent_dir/${backup_name}.tar.gz"
+        else
+            print_warning "Échec de la compression"
+            echo "$backup_dir"
+        fi
+    else
+        echo "$backup_dir"
+    fi
+}
 
-echo -e "${GREEN}   ✅ Nettoyage terminé${NC}"
+# Nettoyer les anciennes sauvegardes
+cleanup_old_backups() {
+    print_step "Nettoyage des anciennes sauvegardes"
+    
+    # Garder seulement les 10 dernières sauvegardes
+    local backup_count=$(find backups/ -maxdepth 1 -name "sio_backup_*" -type d | wc -l)
+    
+    if [ "$backup_count" -gt 10 ]; then
+        local to_delete=$((backup_count - 10))
+        find backups/ -maxdepth 1 -name "sio_backup_*" -type d -printf '%T@ %p\n' | sort -n | head -n "$to_delete" | cut -d' ' -f2- | xargs rm -rf
+        print_info "$to_delete anciennes sauvegardes supprimées"
+    else
+        print_info "Aucune ancienne sauvegarde à supprimer"
+    fi
+}
 
-# Résumé final
-echo ""
-echo -e "${GREEN}======================================${NC}"
-echo -e "${GREEN}  ✅ Sauvegarde terminée${NC}"
-echo -e "${GREEN}======================================${NC}"
-echo ""
+# Fonction principale
+main() {
+    echo -e "${BLUE}💾 Sauvegarde SIO${NC}"
+    echo "============================================="
+    echo ""
+    
+    print_header "Démarrage de la Sauvegarde"
+    
+    # Créer le dossier de sauvegarde
+    local backup_dir=$(create_backup_dir)
+    print_info "Dossier de sauvegarde créé: $backup_dir"
+    
+    # Effectuer la sauvegarde selon le type
+    case $BACKUP_TYPE in
+        "auto"|"full")
+            backup_mongodb "$backup_dir"
+            backup_volumes "$backup_dir"
+            backup_config "$backup_dir"
+            ;;
+        "mongodb")
+            backup_mongodb "$backup_dir"
+            ;;
+        "volumes")
+            backup_volumes "$backup_dir"
+            ;;
+    esac
+    
+    # Créer les métadonnées
+    create_metadata "$backup_dir"
+    
+    # Compresser si demandé
+    local final_backup=$(compress_backup "$backup_dir")
+    
+    # Nettoyer les anciennes sauvegardes
+    cleanup_old_backups
+    
+    # Affichage final
+    print_header "Sauvegarde Terminée"
+    
+    echo -e "${GREEN}🎉 Sauvegarde créée avec succès !${NC}"
+    echo ""
+    echo -e "${CYAN}📁 Emplacement :${NC}"
+    echo "   $final_backup"
+    echo ""
+    echo -e "${CYAN}📊 Taille :${NC}"
+    if [ -d "$final_backup" ]; then
+        echo "   $(du -sh "$final_backup" | cut -f1)"
+    else
+        echo "   $(du -sh "$final_backup" | cut -f1)"
+    fi
+    echo ""
+    echo -e "${PURPLE}🔧 Commandes utiles :${NC}"
+    echo "   ./scripts/restore.sh $final_backup  # Restaurer la sauvegarde"
+    echo "   ls -la backups/                     # Lister les sauvegardes"
+    echo "   ./scripts/status.sh                 # Vérifier l'état"
+}
 
-echo -e "${BLUE}📊 Résumé:${NC}"
-echo "   Environnement:      $ENV_NAME"
-echo "   Type:               $BACKUP_TYPE"
-echo "   Timestamp:          $TIMESTAMP"
-echo "   Emplacement:        $FINAL_BACKUP_PATH"
-
-if [ -f "$FINAL_BACKUP_PATH" ] || [ -d "$FINAL_BACKUP_PATH" ]; then
-    local final_size=$(du -sh "$FINAL_BACKUP_PATH" | cut -f1)
-    echo "   Taille finale:      $final_size"
-fi
-
-echo ""
-echo -e "${BLUE}🔄 Pour restaurer:${NC}"
-echo "   ./scripts/restore.sh $ENV $FINAL_BACKUP_PATH"
-
-echo ""
-echo -e "${GREEN}💾 Sauvegarde SIO Audit réussie !${NC}"
-
-# Log de la sauvegarde
-echo "$(date): Sauvegarde $BACKUP_TYPE réussie - $FINAL_BACKUP_PATH" >> "$BACKUP_ROOT/backup.log"
+# Exécution du script
+main "$@"
 
 
