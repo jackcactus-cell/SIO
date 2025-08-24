@@ -11,7 +11,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Installer les dépendances avec cache optimisé
-RUN npm ci --prefer-offline --no-audit
+RUN npm install --prefer-offline --no-audit
 
 # Copier le code source
 COPY . .

@@ -18,7 +18,7 @@ RUN chown -R nodeuser:nodeuser /app
 COPY --chown=nodeuser:nodeuser package*.json ./
 
 # Installer les dépendances avec optimisations
-RUN npm ci --only=production --prefer-offline --no-audit && \
+RUN npm install --only=production --prefer-offline --no-audit && \
     npm cache clean --force
 
 # Passer à l'utilisateur non-root
