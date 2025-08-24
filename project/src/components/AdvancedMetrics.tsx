@@ -1,12 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
-  TrendingUp, TrendingDown, Activity, Users, Database, Clock, Zap, Target,
-  Cpu, MemoryStick, HardDrive, Network, Gauge, BarChart3, PieChart
+  TrendingUp, TrendingDown, Activity, Users, Database, Zap, Target,
+  Cpu, MemoryStick, Gauge, BarChart3, PieChart, RefreshCw
 } from 'lucide-react';
 import {
   LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart as RechartsPieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts';
+import { useAuditData } from '../hooks/useAuditData';
+import { useRealTimeMetrics } from '../hooks/useRealTimeMetrics';
 
 interface AdvancedMetricsProps {
   auditData?: any[];
@@ -91,102 +93,53 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   return null;
 };
 
-const AdvancedMetrics: React.FC<AdvancedMetricsProps> = ({ auditData = [], performanceMetrics }) => {
-  const [timeSeriesData, setTimeSeriesData] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [objectAccessData, setObjectAccessData] = useState<any[]>([]);
-  const [userSessionData, setUserSessionData] = useState<any[]>([]);
+const AdvancedMetrics: React.FC<AdvancedMetricsProps> = ({ auditData: propAuditData, performanceMetrics }) => {
+  const { auditData: fetchedAuditData, loading: auditLoading, source, refetch } = useAuditData();
+  const [refreshing, setRefreshing] = useState(false);
+  
+  // Utiliser les données d'audit passées en props ou celles récupérées
+  const auditData = propAuditData && propAuditData.length > 0 ? propAuditData : fetchedAuditData;
+  const loading = auditLoading;
+  
+  // Utiliser le hook pour les métriques en temps réel
+  const { timeSeriesData, objectAccessData, userSessionData } = useRealTimeMetrics(auditData);
 
-  useEffect(() => {
-    const generateTimeSeriesData = () => {
-      const now = new Date();
-      const data = [];
-      
-      // Générer des données plus réalistes avec des patterns d'activité
-      for (let i = 23; i >= 0; i--) {
-        const time = new Date(now.getTime() - i * 60 * 60 * 1000);
-        const hour = time.getHours();
-        
-        // Pattern d'activité réaliste (pic en journée, calme la nuit)
-        let baseActivity = 15;
-        if (hour >= 8 && hour <= 18) {
-          baseActivity = 45; // Heures de travail
-        } else if (hour >= 19 && hour <= 22) {
-          baseActivity = 25; // Soirée
-        } else {
-          baseActivity = 8; // Nuit
-        }
-        
-        data.push({
-          time: time.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
-          actions: Math.floor(Math.random() * 20) + baseActivity,
-          users: Math.floor(Math.random() * 6) + Math.max(1, Math.floor(baseActivity / 8)),
-          cpu: Math.floor(Math.random() * 15) + (baseActivity > 30 ? 75 : 65),
-          memory: Math.floor(Math.random() * 8) + 35,
-          connections: Math.floor(Math.random() * 15) + Math.max(10, Math.floor(baseActivity / 3)),
-          sessions: Math.floor(Math.random() * 10) + Math.max(5, Math.floor(baseActivity / 4))
-        });
-      }
-      
-      setTimeSeriesData(data);
-      setLoading(false);
-    };
-
-    const generateObjectAccessData = () => {
-      // Données d'accès aux objets plus réalistes
-      const objects = [
-        { name: 'EMPLOYEES', access: 156, type: 'Table' },
-        { name: 'ORDERS', access: 134, type: 'Table' },
-        { name: 'CUSTOMERS', access: 98, type: 'Table' },
-        { name: 'PRODUCTS', access: 87, type: 'Table' },
-        { name: 'INVENTORY', access: 76, type: 'Table' },
-        { name: 'SALES_HISTORY', access: 65, type: 'View' },
-        { name: 'USER_SESSIONS', access: 54, type: 'Table' },
-        { name: 'AUDIT_LOG', access: 43, type: 'Table' },
-        { name: 'SYSTEM_CONFIG', access: 32, type: 'Table' },
-        { name: 'BACKUP_STATUS', access: 21, type: 'View' }
-      ];
-      setObjectAccessData(objects);
-    };
-
-    const generateUserSessionData = () => {
-      // Données de sessions utilisateur réalistes
-      const users = [
-        { name: 'SYS', sessions: 12, lastActivity: '2 min', status: 'active' },
-        { name: 'TESTCON', sessions: 8, lastActivity: '5 min', status: 'active' },
-        { name: 'SYSTEM', sessions: 6, lastActivity: '1 min', status: 'active' },
-        { name: 'SYS', sessions: 4, lastActivity: '15 min', status: 'idle' },
-        { name: 'ADMIN', sessions: 3, lastActivity: '8 min', status: 'active' },
-        { name: 'SMART2DADMIN', sessions: 2, lastActivity: '25 min', status: 'idle' },
-        { name: 'ANALYST', sessions: 2, lastActivity: '12 min', status: 'active' },
-        { name: 'HR', sessions: 1, lastActivity: '45 min', status: 'idle' }
-      ];
-      setUserSessionData(users);
-    };
-
-    generateTimeSeriesData();
-    generateObjectAccessData();
-    generateUserSessionData();
-    
-    const interval = setInterval(() => {
-      generateTimeSeriesData();
-      generateObjectAccessData();
-      generateUserSessionData();
-    }, 60000); // Mise à jour toutes les minutes
-
-    return () => clearInterval(interval);
-  }, []);
-
-  // Calcul des métriques d'audit
-  const auditMetrics = {
-    totalActions: auditData.length || 1247,
-    uniqueUsers: new Set(auditData.map(item => item.OS_USERNAME)).size || 8,
-    uniqueObjects: new Set(auditData.map(item => item.OBJECT_NAME)).size || 15,
-    selectActions: auditData.filter(item => item.ACTION_NAME === 'SELECT').length || 892,
-    insertActions: auditData.filter(item => item.ACTION_NAME === 'INSERT').length || 156,
-    updateActions: auditData.filter(item => item.ACTION_NAME === 'UPDATE').length || 134,
-    deleteActions: auditData.filter(item => item.ACTION_NAME === 'DELETE').length || 65,
+  // Fonction pour actualiser les données manuellement
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await refetch();
+    setTimeout(() => setRefreshing(false), 1000);
   };
+
+  // Calcul des métriques d'audit avec memoisation pour optimiser les performances
+  const auditMetrics = useMemo(() => {
+    if (!auditData || auditData.length === 0) {
+      return {
+        totalActions: 1247,
+        uniqueUsers: 8,
+        uniqueObjects: 15,
+        selectActions: 892,
+        insertActions: 156,
+        updateActions: 134,
+        deleteActions: 65,
+      };
+    }
+
+    const selectActions = auditData.filter(item => item.ACTION_NAME === 'SELECT').length;
+    const insertActions = auditData.filter(item => item.ACTION_NAME === 'INSERT').length;
+    const updateActions = auditData.filter(item => item.ACTION_NAME === 'UPDATE').length;
+    const deleteActions = auditData.filter(item => item.ACTION_NAME === 'DELETE').length;
+
+    return {
+      totalActions: auditData.length,
+      uniqueUsers: new Set(auditData.map(item => item.OS_USERNAME)).size,
+      uniqueObjects: new Set(auditData.map(item => item.OBJECT_NAME)).size,
+      selectActions,
+      insertActions,
+      updateActions,
+      deleteActions,
+    };
+  }, [auditData]);
 
   // Données pour les graphiques
   const actionDistribution = [
@@ -196,27 +149,55 @@ const AdvancedMetrics: React.FC<AdvancedMetricsProps> = ({ auditData = [], perfo
     { name: 'DELETE', value: auditMetrics.deleteActions, color: '#ef4444' },
   ];
 
-  const userActivityData = auditData.length > 0 ? auditData.reduce((acc: any[], item) => {
-    const existing = acc.find(user => user.name === item.OS_USERNAME);
-    if (existing) {
-      existing.value++;
-    } else {
-      acc.push({ name: item.OS_USERNAME, value: 1 });
+  // Calcul des données d'activité utilisateur avec memoisation
+  const userActivityData = useMemo(() => {
+    if (!auditData || auditData.length === 0) {
+      return [
+        { name: 'datchemi', value: 156 },
+        { name: 'ATCHEMI', value: 134 },
+        { name: 'SYSTEM', value: 98 },
+        { name: 'SYS', value: 87 },
+        { name: 'ADMIN', value: 76 },
+        { name: 'DEVELOPER1', value: 65 },
+        { name: 'ANALYST', value: 54 },
+        { name: 'REPORTER', value: 43 }
+      ];
     }
-    return acc;
-  }, []).slice(0, 8) : [
-    { name: 'datchemi', value: 156 },
-    { name: 'ATCHEMI', value: 134 },
-    { name: 'SYSTEM', value: 98 },
-    { name: 'SYS', value: 87 },
-    { name: 'ADMIN', value: 76 },
-    { name: 'DEVELOPER1', value: 65 },
-    { name: 'ANALYST', value: 54 },
-    { name: 'REPORTER', value: 43 }
-  ];
+
+    const userCounts = auditData.reduce((acc: { [key: string]: number }, item) => {
+      acc[item.OS_USERNAME] = (acc[item.OS_USERNAME] || 0) + 1;
+      return acc;
+    }, {});
+
+    return Object.entries(userCounts)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 8);
+  }, [auditData]);
 
   return (
     <div className="space-y-8">
+      {/* Header avec indicateur de source et bouton de refresh */}
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-4">
+          <h2 className="text-2xl font-bold text-white">Métriques Avancées</h2>
+          <div className="flex items-center gap-2">
+            <div className={`w-2 h-2 rounded-full ${source === 'mongodb' ? 'bg-green-400' : 'bg-yellow-400'}`}></div>
+            <span className="text-sm text-gray-400">
+              {source === 'mongodb' ? 'Données MongoDB' : 'Données par défaut'}
+            </span>
+          </div>
+        </div>
+        <button
+          onClick={handleRefresh}
+          disabled={refreshing}
+          className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 rounded-lg text-white text-sm transition-colors"
+        >
+          <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+          {refreshing ? 'Actualisation...' : 'Actualiser'}
+        </button>
+      </div>
+
       {/* Métriques principales */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
         <MetricCard
@@ -252,7 +233,7 @@ const AdvancedMetrics: React.FC<AdvancedMetricsProps> = ({ auditData = [], perfo
         <MetricCard
           icon={<Cpu className="text-orange-400" />}
           title="CPU Usage"
-          value={`${performanceMetrics?.cpuUsage || 85.6}%`}
+          value={`${timeSeriesData.length > 0 ? timeSeriesData[timeSeriesData.length - 1]?.cpu || 85.6 : 85.6}%`}
           change={1.8}
           color="orange"
           loading={loading}
@@ -378,65 +359,12 @@ const AdvancedMetrics: React.FC<AdvancedMetricsProps> = ({ auditData = [], perfo
         </div>
       </div>
 
-      {/* Nouveaux graphiques */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Accès aux objets */}
-        <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700 rounded-xl p-6 shadow-xl">
-          <div className="flex items-center gap-3 mb-6">
-            <Database className="h-6 w-6 text-purple-400" />
-            <h3 className="text-xl font-bold text-white">Top Objets Accédés</h3>
-          </div>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={objectAccessData} layout="horizontal">
-              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-              <XAxis type="number" stroke="#9ca3af" fontSize={12} />
-              <YAxis dataKey="name" type="category" stroke="#9ca3af" fontSize={12} width={120} />
-              <Tooltip content={<CustomTooltip />} />
-              <Bar dataKey="access" fill="#8b5cf6" radius={[0, 4, 4, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Connexions et sessions */}
-        <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700 rounded-xl p-6 shadow-xl">
-          <div className="flex items-center gap-3 mb-6">
-            <Users className="h-6 w-6 text-cyan-400" />
-            <h3 className="text-xl font-bold text-white">Connexions & Sessions</h3>
-          </div>
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={timeSeriesData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-              <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
-              <YAxis stroke="#9ca3af" fontSize={12} />
-              <Tooltip content={<CustomTooltip />} />
-              <Legend />
-              <Line 
-                type="monotone" 
-                dataKey="connections" 
-                stroke="#06b6d4" 
-                strokeWidth={3}
-                dot={{ fill: '#06b6d4', strokeWidth: 2, r: 4 }}
-                name="Connexions"
-              />
-              <Line 
-                type="monotone" 
-                dataKey="sessions" 
-                stroke="#ec4899" 
-                strokeWidth={3}
-                dot={{ fill: '#ec4899', strokeWidth: 2, r: 4 }}
-                name="Sessions"
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
       {/* Métriques de performance système */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
         <MetricCard
           icon={<MemoryStick className="text-cyan-400" />}
           title="Mémoire"
-          value={`${performanceMetrics?.memoryUsage || 38.9}%`}
+          value={`${timeSeriesData.length > 0 ? timeSeriesData[timeSeriesData.length - 1]?.memory || 38.9 : 38.9}%`}
           change={0.8}
           color="cyan"
           loading={loading}

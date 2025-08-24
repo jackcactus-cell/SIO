@@ -7,6 +7,7 @@ import AdvancedMetrics from '../../components/AdvancedMetrics';
 import IntelligentAlerts from '../../components/IntelligentAlerts';
 import SystemInfo from '../../components/SystemInfo';
 import { useOracleConnection } from '../../context/OracleConnectionContext';
+import { useAuditData } from '../../hooks/useAuditData';
 
 // --- Interfaces ---
 
@@ -91,8 +92,8 @@ const QuickStats: React.FC<QuickStatsProps> = ({ icon, title, value, change, col
 };
 
 const Overview: React.FC = () => {
-  const [auditData, setAuditData] = useState<AuditData[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { auditData, loading: auditLoading, source, refetch } = useAuditData();
+  const [loading, setLoading] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [perfMetrics, setPerfMetrics] = useState<PerfMetrics>({
     dbTime: 1.11,
@@ -111,29 +112,12 @@ const Overview: React.FC = () => {
   });
   const { isConnected } = useOracleConnection();
 
-  // Récupération des données d'audit
+  // Mise à jour du lastRefresh quand les données changent
   useEffect(() => {
-    const fetchAuditData = async () => {
-      try {
-        setLoading(true);
-        const response = await fetch('http://localhost:4000/api/audit/raw');
-        const data = await response.json();
-        if (data.status === 'success') {
-          setAuditData(data.data);
-        }
-      } catch (error) {
-        console.error('Erreur lors de la récupération des données d\'audit:', error);
-      } finally {
-        setLoading(false);
-        setLastRefresh(new Date());
-      }
-    };
-
-    fetchAuditData();
-    const interval = setInterval(fetchAuditData, 30000); // Rafraîchissement toutes les 30 secondes
-
-    return () => clearInterval(interval);
-  }, []);
+    if (!auditLoading) {
+      setLastRefresh(new Date());
+    }
+  }, [auditData, auditLoading]);
 
   // Mise à jour dynamique des métriques de performance
   useEffect(() => {
@@ -162,8 +146,9 @@ const Overview: React.FC = () => {
     deleteActions: auditData.filter(item => item.ACTION_NAME === 'DELETE').length,
   };
 
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     setLoading(true);
+    await refetch();
     setTimeout(() => {
       setLoading(false);
       setLastRefresh(new Date());
@@ -190,7 +175,7 @@ const Overview: React.FC = () => {
                 </div>
                 <div className="flex items-center gap-1">
                   <Database className="h-3 w-3" />
-                  <span>Statut: {isConnected ? 'Connecté' : 'Connecté'}</span>
+                  <span>Source: {source === 'mongodb' ? 'MongoDB' : 'Défaut'}</span>
                 </div>
               </div>
             </div>
@@ -220,7 +205,7 @@ const Overview: React.FC = () => {
             value={auditMetrics.totalActions.toLocaleString()}
             change={5.2}
             color="blue"
-            loading={loading}
+            loading={auditLoading}
           />
           <QuickStats 
             icon={<Users className="text-green-400" />}
@@ -228,7 +213,7 @@ const Overview: React.FC = () => {
             value={auditMetrics.uniqueUsers}
             change={2.1}
             color="green"
-            loading={loading}
+            loading={auditLoading}
           />
           <QuickStats 
             icon={<Database className="text-purple-400" />}
@@ -236,7 +221,7 @@ const Overview: React.FC = () => {
             value={auditMetrics.uniqueObjects}
             change={-1.5}
             color="purple"
-            loading={loading}
+            loading={auditLoading}
           />
           <QuickStats 
             icon={<Cpu className="text-orange-400" />}
