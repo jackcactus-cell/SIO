@@ -103,6 +103,15 @@ const AdvancedMetrics: React.FC<AdvancedMetricsProps> = ({ auditData: propAuditD
   
   // Utiliser le hook pour les métriques en temps réel
   const { timeSeriesData, objectAccessData, userSessionData } = useRealTimeMetrics(auditData);
+  
+  // Debug logs pour vérifier les données
+  console.log('📊 AdvancedMetrics Data State:', {
+    timeSeriesDataLength: timeSeriesData?.length || 0,
+    objectAccessDataLength: objectAccessData?.length || 0,
+    userSessionDataLength: userSessionData?.length || 0,
+    auditDataLength: auditData?.length || 0,
+    source
+  });
 
   // Fonction pour actualiser les données manuellement
   const handleRefresh = async () => {
@@ -165,19 +174,26 @@ const AdvancedMetrics: React.FC<AdvancedMetricsProps> = ({ auditData: propAuditD
 
   // Calcul des données d'activité utilisateur avec memoisation
   const userActivityData = useMemo(() => {
-    // Données par défaut robustes toujours disponibles
+    // Données par défaut robustes toujours disponibles avec valeurs fixes pour assurer la cohérence
     const defaultData = [
-      { name: 'datchemi', value: Math.floor(Math.random() * 50) + 150 },
-      { name: 'ATCHEMI', value: Math.floor(Math.random() * 40) + 120 },
-      { name: 'SYSTEM', value: Math.floor(Math.random() * 30) + 90 },
-      { name: 'SYS', value: Math.floor(Math.random() * 25) + 75 },
-      { name: 'ADMIN', value: Math.floor(Math.random() * 20) + 60 },
-      { name: 'SMART2DADMIN', value: Math.floor(Math.random() * 15) + 45 },
-      { name: 'ANALYST', value: Math.floor(Math.random() * 12) + 35 },
-      { name: 'DEVELOPER1', value: Math.floor(Math.random() * 10) + 25 }
+      { name: 'datchemi', value: 180 },
+      { name: 'ATCHEMI', value: 145 },
+      { name: 'SYSTEM', value: 110 },
+      { name: 'SYS', value: 95 },
+      { name: 'ADMIN', value: 75 },
+      { name: 'SMART2DADMIN', value: 58 },
+      { name: 'ANALYST', value: 42 },
+      { name: 'DEVELOPER1', value: 35 }
     ];
 
+    console.log('📊 UserActivityData calculation', { 
+      hasAuditData: !!(auditData && auditData.length > 0),
+      auditDataLength: auditData?.length || 0,
+      defaultData 
+    });
+
     if (!auditData || auditData.length === 0) {
+      console.log('📊 Using default user activity data');
       return defaultData;
     }
 
@@ -191,6 +207,8 @@ const AdvancedMetrics: React.FC<AdvancedMetricsProps> = ({ auditData: propAuditD
       .sort((a, b) => b.value - a.value)
       .slice(0, 8);
 
+    console.log('📊 Real user data calculated', { realData, userCounts });
+
     // Si pas assez de données réelles, compléter avec les données par défaut
     if (realData.length < 4) {
       const mergedData = [...realData];
@@ -199,9 +217,11 @@ const AdvancedMetrics: React.FC<AdvancedMetricsProps> = ({ auditData: propAuditD
           mergedData.push(defaultItem);
         }
       });
+      console.log('📊 Using merged user data', mergedData.slice(0, 8));
       return mergedData.slice(0, 8);
     }
 
+    console.log('📊 Using real user data', realData);
     return realData;
   }, [auditData]);
 
@@ -278,34 +298,44 @@ const AdvancedMetrics: React.FC<AdvancedMetricsProps> = ({ auditData: propAuditD
           <div className="flex items-center gap-3 mb-6">
             <BarChart3 className="h-6 w-6 text-blue-400" />
             <h3 className="text-xl font-bold text-white">Activité en Temps Réel (24h)</h3>
+            <span className="text-xs text-gray-400">({timeSeriesData?.length || 0} points)</span>
           </div>
-          <ResponsiveContainer width="100%" height={300}>
-            <AreaChart data={timeSeriesData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-              <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
-              <YAxis stroke="#9ca3af" fontSize={12} />
-              <Tooltip content={<CustomTooltip />} />
-              <Legend />
-              <Area 
-                type="monotone" 
-                dataKey="actions" 
-                stroke="#3b82f6" 
-                fill="#3b82f6" 
-                fillOpacity={0.3}
-                strokeWidth={2}
-                name="Actions"
-              />
-              <Area 
-                type="monotone" 
-                dataKey="users" 
-                stroke="#10b981" 
-                fill="#10b981" 
-                fillOpacity={0.3}
-                strokeWidth={2}
-                name="Utilisateurs"
-              />
-            </AreaChart>
-          </ResponsiveContainer>
+          {timeSeriesData && timeSeriesData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={300}>
+              <AreaChart data={timeSeriesData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
+                <YAxis stroke="#9ca3af" fontSize={12} />
+                <Tooltip content={<CustomTooltip />} />
+                <Legend />
+                <Area 
+                  type="monotone" 
+                  dataKey="actions" 
+                  stroke="#3b82f6" 
+                  fill="#3b82f6" 
+                  fillOpacity={0.3}
+                  strokeWidth={2}
+                  name="Actions"
+                />
+                <Area 
+                  type="monotone" 
+                  dataKey="users" 
+                  stroke="#10b981" 
+                  fill="#10b981" 
+                  fillOpacity={0.3}
+                  strokeWidth={2}
+                  name="Utilisateurs"
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="h-[300px] flex items-center justify-center">
+              <div className="text-center">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-400 mx-auto mb-4"></div>
+                <p className="text-gray-400">Génération des données temporelles...</p>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Distribution des actions */}
@@ -437,16 +467,26 @@ const AdvancedMetrics: React.FC<AdvancedMetricsProps> = ({ auditData: propAuditD
         <div className="flex items-center gap-3 mb-6">
           <Users className="h-6 w-6 text-green-400" />
           <h3 className="text-xl font-bold text-white">Top Utilisateurs par Activité</h3>
+          <span className="text-xs text-gray-400">({userActivityData?.length || 0} utilisateurs)</span>
         </div>
-        <ResponsiveContainer width="100%" height={300}>
-          <BarChart data={userActivityData} layout="horizontal">
-            <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-            <XAxis type="number" stroke="#9ca3af" fontSize={12} />
-            <YAxis dataKey="name" type="category" stroke="#9ca3af" fontSize={12} width={100} />
-            <Tooltip content={<CustomTooltip />} />
-            <Bar dataKey="value" fill="#10b981" radius={[0, 4, 4, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
+        {userActivityData && userActivityData.length > 0 ? (
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={userActivityData} layout="horizontal">
+              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+              <XAxis type="number" stroke="#9ca3af" fontSize={12} />
+              <YAxis dataKey="name" type="category" stroke="#9ca3af" fontSize={12} width={100} />
+              <Tooltip content={<CustomTooltip />} />
+              <Bar dataKey="value" fill="#10b981" radius={[0, 4, 4, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        ) : (
+          <div className="h-[300px] flex items-center justify-center">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-400 mx-auto mb-4"></div>
+              <p className="text-gray-400">Chargement des données utilisateur...</p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Sessions utilisateur détaillées */}
