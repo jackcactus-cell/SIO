@@ -1,244 +1,302 @@
 #!/bin/bash
 
-# Script de Démarrage SIO
-# Auteur: Assistant IA
+# =============================================================================
+# Script de démarrage des services SIO
+# =============================================================================
 
-set -e
+set -euo pipefail
 
-# Couleurs
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# Source des utilitaires
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/utils/docker-utils.sh"
+source "$SCRIPT_DIR/utils/health-utils.sh"
 
-print_info() {
-    echo -e "${GREEN}✅ $1${NC}"
+# Configuration
+readonly START_LOG_FILE="logs/start.log"
+
+# =============================================================================
+# Fonctions de démarrage
+# =============================================================================
+
+check_prerequisites() {
+    log_info "Vérification des prérequis..."
+    
+    # Vérifier Docker
+    if ! check_docker; then
+        log_error "Docker n'est pas disponible"
+        return 1
+    fi
+    
+    # Vérifier Docker Compose
+    if ! check_docker_compose; then
+        log_error "Docker Compose n'est pas disponible"
+        return 1
+    fi
+    
+    # Vérifier le fichier docker-compose.yml
+    if ! check_compose_file; then
+        log_error "Fichier docker-compose.yml non trouvé"
+        return 1
+    fi
+    
+    # Vérifier les ports
+    if ! check_ports; then
+        log_warning "Certains ports sont déjà utilisés"
+        read -p "Continuer quand même? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            return 1
+        fi
+    fi
+    
+    log_success "Prérequis vérifiés"
+    return 0
 }
 
-print_warning() {
-    echo -e "${YELLOW}⚠️  $1${NC}"
+start_services_sequential() {
+    log_info "Démarrage séquentiel des services..."
+    
+    # Démarrer MongoDB en premier
+    log_info "Démarrage de MongoDB..."
+    if ! docker_compose_cmd up -d mongodb; then
+        log_error "Échec du démarrage de MongoDB"
+        return 1
+    fi
+    
+    # Attendre que MongoDB soit prêt
+    log_info "Attente de MongoDB..."
+    if ! wait_for_service "mongodb" "27017" 60; then
+        log_error "MongoDB n'est pas prêt"
+        return 1
+    fi
+    
+    # Démarrer les backends
+    log_info "Démarrage des backends..."
+    if ! docker_compose_cmd up -d backend_python backend backend_llm; then
+        log_error "Échec du démarrage des backends"
+        return 1
+    fi
+    
+    # Attendre que les backends soient prêts
+    log_info "Attente des backends..."
+    if ! wait_for_service "backend_python" "8000" 60; then
+        log_warning "Backend Python n'est pas prêt"
+    fi
+    
+    if ! wait_for_service "backend" "4000" 60; then
+        log_warning "Backend Node.js n'est pas prêt"
+    fi
+    
+    if ! wait_for_service "backend_llm" "8001" 60; then
+        log_warning "Backend LLM n'est pas prêt"
+    fi
+    
+    # Démarrer le frontend
+    log_info "Démarrage du frontend..."
+    if ! docker_compose_cmd up -d frontend; then
+        log_error "Échec du démarrage du frontend"
+        return 1
+    fi
+    
+    # Démarrer Mongo Express
+    log_info "Démarrage de Mongo Express..."
+    if ! docker_compose_cmd up -d mongo-express; then
+        log_warning "Échec du démarrage de Mongo Express"
+    fi
+    
+    log_success "Services démarrés séquentiellement"
+    return 0
 }
 
-print_error() {
-    echo -e "${RED}❌ $1${NC}"
+start_services_parallel() {
+    log_info "Démarrage parallèle des services..."
+    
+    if ! start_services; then
+        log_error "Échec du démarrage des services"
+        return 1
+    fi
+    
+    log_success "Services démarrés en parallèle"
+    return 0
 }
 
-print_header() {
-    echo -e "${BLUE}📋 $1${NC}"
-    echo "============================================="
-}
-
-# Fonction d'aide
-show_help() {
-    echo "Usage: $0 [options]"
-    echo ""
-    echo "Options:"
-    echo "  --build, -b           - Reconstruire les images avant démarrage"
-    echo "  --force, -f           - Forcer le redémarrage (arrêt puis démarrage)"
-    echo "  --help, -h            - Afficher cette aide"
-    echo ""
-    echo "Exemples:"
-    echo "  $0                    # Démarrage normal"
-    echo "  $0 --build            # Reconstruire et démarrer"
-    echo "  $0 --force            # Forcer le redémarrage"
-}
-
-# Variables
-BUILD=false
-FORCE=false
-
-# Traitement des arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --help|-h)
-            show_help
-            exit 0
-            ;;
-        --build|-b)
-            BUILD=true
-            shift
-            ;;
-        --force|-f)
-            FORCE=true
-            shift
-            ;;
-        *)
-            print_error "Option inconnue: $1"
-            show_help
-            exit 1
-            ;;
-    esac
-done
-
-# Vérifications
-if ! command -v docker &> /dev/null; then
-    print_error "Docker n'est pas installé"
-    exit 1
-fi
-
-if ! command -v docker-compose &> /dev/null; then
-    print_error "Docker Compose n'est pas installé"
-    exit 1
-fi
-
-if [ ! -f "config/docker/docker-compose.yml" ]; then
-    print_error "Fichier docker-compose.yml non trouvé"
-    exit 1
-fi
-
-# Vérifier si les services sont déjà en cours d'exécution
-check_running_services() {
-    local running_services=$(docker-compose -f config/docker/docker-compose.yml ps --services --filter "status=running" 2>/dev/null || echo "")
-    if [ -n "$running_services" ]; then
-        print_warning "Des services sont déjà en cours d'exécution"
-        echo "Services actifs:"
-        echo "$running_services" | while read -r service; do
-            if [ -n "$service" ]; then
-                echo "  • $service"
+wait_for_all_services() {
+    log_info "Attente de tous les services..."
+    
+    local services=(
+        "mongodb|27017"
+        "backend_python|8000"
+        "backend|4000"
+        "backend_llm|8001"
+        "frontend|80"
+        "mongo-express|8081"
+    )
+    
+    local timeout=180
+    local elapsed=0
+    local ready_services=0
+    local total_services=${#services[@]}
+    
+    while [[ $elapsed -lt $timeout ]]; do
+        ready_services=0
+        
+        for service in "${services[@]}"; do
+            local service_name="${service%|*}"
+            local port="${service#*|}"
+            
+            if wait_for_service "$service_name" "$port" 5; then
+                ((ready_services++))
             fi
         done
         
-        if [ "$FORCE" = false ]; then
-            echo ""
-            read -p "Voulez-vous continuer ? (y/N): " -n 1 -r
-            echo
-            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                print_info "Démarrage annulé"
-                exit 0
-            fi
+        if [[ $ready_services -eq $total_services ]]; then
+            log_success "Tous les services sont prêts"
+            return 0
+        fi
+        
+        log_info "Services prêts: $ready_services/$total_services ($elapsed/$timeout secondes)"
+        sleep 10
+        ((elapsed += 10))
+    done
+    
+    log_warning "Timeout lors de l'attente des services"
+    return 1
+}
+
+verify_services_health() {
+    log_info "Vérification de la santé des services..."
+    
+    # Vérifier la santé des conteneurs
+    if ! check_all_services_health; then
+        log_warning "Certains services ne sont pas en bonne santé"
+    fi
+    
+    # Vérifier les endpoints
+    if ! check_service_endpoints; then
+        log_warning "Certains endpoints ne sont pas accessibles"
+    fi
+    
+    # Vérifier les connexions aux bases de données
+    if ! check_database_connections; then
+        log_warning "Problèmes de connexion aux bases de données"
+    fi
+    
+    log_success "Vérification de santé terminée"
+    return 0
+}
+
+display_service_status() {
+    echo
+    echo "=========================================="
+    echo "  Statut des services SIO"
+    echo "=========================================="
+    echo
+    
+    # Afficher le statut des conteneurs
+    docker_compose_cmd ps
+    
+    echo
+    echo "Endpoints disponibles:"
+    echo "  Frontend:        http://localhost:80"
+    echo "  Backend Python:  http://localhost:8000"
+    echo "  Backend Node.js: http://localhost:4000"
+    echo "  Backend LLM:     http://localhost:8001"
+    echo "  Mongo Express:   http://localhost:8081"
+    echo
+    
+    # Afficher les ressources utilisées
+    echo "Ressources système:"
+    echo "  CPU: $(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | sed 's/%us,//')%"
+    echo "  Mémoire: $(free -m | awk 'NR==2{printf "%.1f%%", $3*100/$2}')"
+    echo "  Disque: $(df . | awk 'NR==2 {print $5}') utilisé"
+    echo
+}
+
+# =============================================================================
+# Fonction principale
+# =============================================================================
+
+main() {
+    echo "=========================================="
+    echo "  Démarrage des services SIO"
+    echo "=========================================="
+    echo
+    
+    # Créer le répertoire de logs
+    mkdir -p "$(dirname "$START_LOG_FILE")"
+    
+    # Vérifier les prérequis
+    if ! check_prerequisites; then
+        log_error "Prérequis non satisfaits"
+        exit 1
+    fi
+    
+    # Vérifier si des services sont déjà en cours d'exécution
+    if docker_compose_cmd ps --quiet | grep -q .; then
+        log_warning "Des services sont déjà en cours d'exécution"
+        read -p "Redémarrer les services? (y/N): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            log_info "Arrêt des services existants..."
+            stop_services
+            sleep 5
+        else
+            log_info "Affichage du statut des services existants..."
+            display_service_status
+            exit 0
         fi
     fi
-}
-
-# Arrêter les services existants
-stop_existing_services() {
-    print_header "Arrêt des Services Existants"
     
-    print_step "Arrêt des conteneurs"
-    docker-compose -f config/docker/docker-compose.yml down 2>/dev/null || true
-    
-    print_info "Services arrêtés"
-}
-
-# Construire les images si demandé
-build_images() {
-    if [ "$BUILD" = true ]; then
-        print_header "Construction des Images"
-        
-        print_step "Construction de l'image Frontend"
-        docker build -t sio-frontend:latest ./project
-        
-        print_step "Construction de l'image Backend Node.js"
-        docker build -t sio-backend-node:latest ./backend
-        
-        print_step "Construction de l'image Backend Python"
-        docker build -t sio-backend-python:latest ./backend_python
-        
-        print_step "Construction de l'image Backend LLM"
-        docker build -t sio-backend-llm:latest ./backend/llm-prototype
-        
-        print_info "Images construites avec succès"
-    fi
-}
-
-# Démarrer les services
-start_services() {
-    print_header "Démarrage des Services"
-    
-    print_step "Démarrage des conteneurs"
-    docker-compose -f config/docker/docker-compose.yml up -d
-    
-    print_step "Attente du démarrage des services"
-    sleep 30
-    
-    print_info "Services démarrés"
-}
-
-# Vérifier l'état des services
-verify_services() {
-    print_header "Vérification des Services"
-    
-    print_step "État des conteneurs"
-    docker-compose -f config/docker/docker-compose.yml ps
-    
-    print_step "Test de connectivité"
-    
-    # Test Frontend
-    if curl -f http://localhost:80 > /dev/null 2>&1; then
-        print_info "Frontend accessible sur http://localhost"
-    else
-        print_warning "Frontend non accessible"
+    # Choisir le mode de démarrage
+    local start_mode="parallel"
+    if [[ "${1:-}" == "--sequential" ]]; then
+        start_mode="sequential"
     fi
     
-    # Test Backend Node.js
-    if curl -f http://localhost:4000/health > /dev/null 2>&1; then
-        print_info "Backend Node.js accessible sur http://localhost:4000"
-    else
-        print_warning "Backend Node.js non accessible"
+    # Démarrer les services
+    case "$start_mode" in
+        "sequential")
+            if ! start_services_sequential; then
+                log_error "Échec du démarrage séquentiel"
+                exit 1
+            fi
+            ;;
+        "parallel")
+            if ! start_services_parallel; then
+                log_error "Échec du démarrage parallèle"
+                exit 1
+            fi
+            ;;
+    esac
+    
+    # Attendre que tous les services soient prêts
+    if ! wait_for_all_services; then
+        log_warning "Certains services ne sont pas prêts"
     fi
     
-    # Test Backend Python
-    if curl -f http://localhost:8000/health > /dev/null 2>&1; then
-        print_info "Backend Python accessible sur http://localhost:8000"
-    else
-        print_warning "Backend Python non accessible"
-    fi
+    # Vérifier la santé des services
+    verify_services_health
     
-    # Test Backend LLM
-    if curl -f http://localhost:8001/health > /dev/null 2>&1; then
-        print_info "Backend LLM accessible sur http://localhost:8001"
-    else
-        print_warning "Backend LLM non accessible"
-    fi
+    # Afficher le statut final
+    display_service_status
     
-    # Test MongoDB
-    if docker exec sio_mongodb_prod mongosh --eval "db.runCommand('ping')" > /dev/null 2>&1; then
-        print_info "MongoDB accessible"
-    else
-        print_warning "MongoDB non accessible"
-    fi
+    echo "=========================================="
+    echo "  Services démarrés avec succès!"
+    echo "=========================================="
+    echo
+    echo "Commandes utiles:"
+    echo "  Arrêter:     ./scripts/stop.sh"
+    echo "  Redémarrer:  ./scripts/restart.sh"
+    echo "  Logs:        ./scripts/logs.sh"
+    echo "  Santé:       ./scripts/health-check.sh"
+    echo "  Monitoring:  ./scripts/monitor.sh"
+    echo
 }
 
-# Affichage des informations finales
-show_final_info() {
-    print_header "Démarrage Terminé"
-    
-    echo -e "${GREEN}🎉 Vos services SIO sont maintenant démarrés !${NC}"
-    echo ""
-    echo -e "${CYAN}📊 Services disponibles :${NC}"
-    echo "   Frontend:     http://localhost"
-    echo "   Backend Node.js: http://localhost:4000"
-    echo "   Backend Python:  http://localhost:8000"
-    echo "   Backend LLM:     http://localhost:8001"
-    echo "   MongoDB:         localhost:27017"
-    echo ""
-    echo -e "${PURPLE}🔧 Commandes utiles :${NC}"
-    echo "   ./scripts/status.sh    # Vérifier l'état"
-    echo "   ./scripts/logs.sh      # Voir les logs"
-    echo "   ./scripts/stop.sh      # Arrêter les services"
-    echo "   ./scripts/restart.sh   # Redémarrer les services"
-}
-
-# Fonction principale
-main() {
-    echo -e "${BLUE}🚀 Démarrage des Services SIO${NC}"
-    echo "============================================="
-    echo ""
-    
-    check_running_services
-    
-    if [ "$FORCE" = true ]; then
-        stop_existing_services
-    fi
-    
-    build_images
-    start_services
-    verify_services
-    show_final_info
-}
-
+# =============================================================================
 # Exécution du script
-main "$@"
+# =============================================================================
 
-
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

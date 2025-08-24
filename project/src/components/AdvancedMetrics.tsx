@@ -152,14 +152,14 @@ const AdvancedMetrics: React.FC<AdvancedMetricsProps> = ({ auditData = [], perfo
     const generateUserSessionData = () => {
       // Données de sessions utilisateur réalistes
       const users = [
-        { name: 'datchemi', sessions: 12, lastActivity: '2 min', status: 'active' },
-        { name: 'ATCHEMI', sessions: 8, lastActivity: '5 min', status: 'active' },
+        { name: 'SYS', sessions: 12, lastActivity: '2 min', status: 'active' },
+        { name: 'TESTCON', sessions: 8, lastActivity: '5 min', status: 'active' },
         { name: 'SYSTEM', sessions: 6, lastActivity: '1 min', status: 'active' },
         { name: 'SYS', sessions: 4, lastActivity: '15 min', status: 'idle' },
         { name: 'ADMIN', sessions: 3, lastActivity: '8 min', status: 'active' },
-        { name: 'DEVELOPER1', sessions: 2, lastActivity: '25 min', status: 'idle' },
+        { name: 'SMART2DADMIN', sessions: 2, lastActivity: '25 min', status: 'idle' },
         { name: 'ANALYST', sessions: 2, lastActivity: '12 min', status: 'active' },
-        { name: 'REPORTER', sessions: 1, lastActivity: '45 min', status: 'idle' }
+        { name: 'HR', sessions: 1, lastActivity: '45 min', status: 'idle' }
       ];
       setUserSessionData(users);
     };

@@ -15,9 +15,13 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     
-    # Base de données
-    mongodb_uri: str = "mongodb://localhost:27017/auditdb"
-    mongodb_db_name: str = "auditdb"
+    # Base de données MongoDB
+    mongodb_uri: str = "mongodb://admin:securepassword123@localhost:27017/"
+    mongodb_db_name: str = "audit_db"
+    mongodb_username: str = "audit_user"
+    mongodb_password: str = "audit_password_123"
+    
+    # Base de données SQLite
     sqlite_db_path: str = "./cache/chatbot_cache.db"
     redis_url: str = "redis://localhost:6379"
 
@@ -30,10 +34,10 @@ class Settings(BaseSettings):
     oracle_driver_mode: str = "thin"  # "thin" par défaut, "thick" si Instant Client installé
     
     # API Keys
-    openai_api_key: str
+    openai_api_key: str = ""
     
     # Sécurité
-    secret_key: str
+    secret_key: str = "your_super_secret_key_here_change_in_production_12345"
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     

@@ -20,10 +20,12 @@ import {
   ArrowUpRight,
   RefreshCw,
   Sparkles,
-  ExternalLink
+  ExternalLink,
+  Calendar
 } from 'lucide-react';
 import { auditQuestions } from '../utils/auditQuestions';
 import DynamicSuggestions from './DynamicSuggestions';
+import { config } from '../config';
 
 // Types
 interface Message {
@@ -431,6 +433,136 @@ const AnalysisDisplay: React.FC<{ interpretation: Message['interpretation'] }> =
       );
 };
 
+// Composant pour afficher les analyses temporelles
+const TimeAnalysisDisplay: React.FC<{ data: any }> = ({ data }) => {
+  if (!data) return null;
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('fr-FR', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Résumé principal */}
+      {data.summary && (
+        <div className="bg-blue-900/20 backdrop-blur-sm border border-blue-800/30 rounded-lg p-4">
+          <h4 className="text-sm font-medium text-blue-300 flex items-center mb-2">
+            <Clock className="w-4 h-4 mr-2" />
+            Résumé temporel
+          </h4>
+          <p className="text-sm text-blue-100">{data.summary}</p>
+        </div>
+      )}
+
+      {/* Analyse quotidienne */}
+      {data.daily && data.daily.mostActiveDay && (
+        <div className="bg-green-900/20 backdrop-blur-sm border border-green-800/30 rounded-lg p-4">
+          <h4 className="text-sm font-medium text-green-300 flex items-center mb-2">
+            <TrendingUp className="w-4 h-4 mr-2" />
+            Jour le plus actif
+          </h4>
+          <div className="space-y-2">
+            <p className="text-sm text-green-100">
+              <strong>Date :</strong> {formatDate(data.daily.mostActiveDay.date)}
+            </p>
+            <p className="text-sm text-green-100">
+              <strong>Actions :</strong> {data.daily.mostActiveDay.count}
+            </p>
+            <p className="text-sm text-green-100">
+              <strong>Utilisateurs :</strong> {data.daily.mostActiveDay.users.length}
+            </p>
+            <p className="text-sm text-green-100">
+              <strong>Actions types :</strong> {data.daily.mostActiveDay.actions.join(', ')}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Analyse horaire */}
+      {data.hourly && data.hourly.peakHour && (
+        <div className="bg-purple-900/20 backdrop-blur-sm border border-purple-800/30 rounded-lg p-4">
+          <h4 className="text-sm font-medium text-purple-300 flex items-center mb-2">
+            <Clock className="w-4 h-4 mr-2" />
+            Heure de pointe
+          </h4>
+          <div className="space-y-2">
+            <p className="text-sm text-purple-100">
+              <strong>Heure :</strong> {data.hourly.peakHour.hour}h
+            </p>
+            <p className="text-sm text-purple-100">
+              <strong>Actions :</strong> {data.hourly.peakHour.count}
+            </p>
+            <p className="text-sm text-purple-100">
+              <strong>Utilisateurs actifs :</strong> {data.hourly.peakHour.users.length}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Période couverte */}
+      {data.period && (
+        <div className="bg-indigo-900/20 backdrop-blur-sm border border-indigo-800/30 rounded-lg p-4">
+          <h4 className="text-sm font-medium text-indigo-300 flex items-center mb-2">
+            <Calendar className="w-4 h-4 mr-2" />
+            Période couverte
+          </h4>
+          <div className="space-y-2">
+            <p className="text-sm text-indigo-100">
+              <strong>Début :</strong> {formatDate(data.period.startDate)}
+            </p>
+            <p className="text-sm text-indigo-100">
+              <strong>Fin :</strong> {formatDate(data.period.endDate)}
+            </p>
+            <p className="text-sm text-indigo-100">
+              <strong>Durée :</strong> {data.period.durationDays} jours
+            </p>
+            <p className="text-sm text-indigo-100">
+              <strong>Total événements :</strong> {data.period.totalRecords}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Tous les jours (si disponible) */}
+      {data.daily && data.daily.allDays && data.daily.allDays.length > 0 && (
+        <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg p-4 border border-gray-700">
+          <h4 className="text-lg font-semibold mb-4 text-white flex items-center">
+            <Calendar className="w-5 h-5 mr-2 text-blue-400" />
+            Activité par jour
+          </h4>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-700/50">
+              <thead>
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider bg-gray-800/30">Jour</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider bg-gray-800/30">Actions</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider bg-gray-800/30">Utilisateurs</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider bg-gray-800/30">Objets</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-700/50">
+                {data.daily.allDays.slice(0, 10).map((day: any, index: number) => (
+                  <tr key={index} className="hover:bg-gray-700/30 transition-colors">
+                    <td className="px-4 py-3 text-sm text-gray-300">{formatDate(day.date)}</td>
+                    <td className="px-4 py-3 text-sm text-right font-mono text-blue-300">{day.count}</td>
+                    <td className="px-4 py-3 text-sm text-right font-mono text-blue-300">{day.users.length}</td>
+                    <td className="px-4 py-3 text-sm text-right font-mono text-blue-300">{day.objects.length}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 // Composant principal du chatbot
 const Chatbot: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -480,7 +612,7 @@ const Chatbot: React.FC = () => {
 
       if (isSql) {
         // Route d'exécution SQL Oracle
-        const response = await fetch(((import.meta as any).env?.VITE_BACKEND_PY_URL || 'http://localhost:8000') + '/api/oracle/execute-sql', {
+        const response = await fetch(config.backendPyUrl + '/api/oracle/execute-sql', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ query: text })
@@ -501,8 +633,8 @@ const Chatbot: React.FC = () => {
         };
         setMessages(prev => [...prev, botMessage]);
       } else {
-        // Route LLM existante
-        const response = await fetch(((import.meta as any).env?.VITE_BACKEND_LLM_URL || 'http://localhost:8001') + '/api/ask-llm', {
+        // Route chatbot Node.js
+        const response = await fetch(config.backendUrl + '/api/chatbot', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ question: text })
@@ -512,33 +644,35 @@ const Chatbot: React.FC = () => {
         }
         const data = await response.json();
         let botMessage: Message;
-        if (data.success === false) {
+        
+        if (data.status === 'error') {
           botMessage = {
             id: (Date.now() + 1).toString(),
-            text: data.error || "Une erreur est survenue lors du traitement de votre question.",
+            text: data.message || "Une erreur est survenue lors du traitement de votre question.",
             sender: 'bot',
             timestamp: new Date(),
             type: 'error'
           };
-        } else if (data.type === 'table' || (Array.isArray(data.columns) && Array.isArray(data.data))) {
+        } else if (data.type === 'analysis' && data.data && data.data.data && Array.isArray(data.data.data)) {
+          // Réponse avec tableau de données
           botMessage = {
             id: (Date.now() + 1).toString(),
             text: '',
             sender: 'bot',
             timestamp: new Date(),
             type: 'table',
-            data: data.data,
-            columns: data.columns,
-            summary: data.summary || '',
-            explanation: data.explanation,
-            interpretation: data.interpretation,
+            data: data.data.data,
+            columns: data.data.columns || Object.keys(data.data.data[0] || {}),
+            summary: data.data.summary || '',
+            explanation: data.data.explanation,
+            interpretation: data.data.interpretation,
             keywords: data.keywords || [],
             keywordAnalysis: data.keywordAnalysis || null
           };
           
           // Ajouter des liens vers l'analyse détaillée si des utilisateurs sont détectés
-          if (detectedUsers.length > 0 && data.data && Array.isArray(data.data)) {
-            const usersInData = data.data
+          if (detectedUsers.length > 0 && data.data.data && Array.isArray(data.data.data)) {
+            const usersInData = data.data.data
               .filter((row: any) => row.utilisateur || row.user || row.dbusername || row.os_username)
               .map((row: any) => row.utilisateur || row.user || row.dbusername || row.os_username)
               .filter(Boolean);
@@ -549,36 +683,72 @@ const Chatbot: React.FC = () => {
               );
             }
           }
-        } else if (data.answer) {
+        } else if (data.type === 'time_analysis' && data.data) {
+          // Réponse d'analyse temporelle
           botMessage = {
             id: (Date.now() + 1).toString(),
-            text: data.answer,
+            text: '',
             sender: 'bot',
             timestamp: new Date(),
-            type: 'message',
-            summary: data.answer,
+            type: 'statistics',
+            summary: data.data.summary || data.data.message || 'Analyse temporelle',
+            data: data.data,
             keywords: data.keywords || [],
             keywordAnalysis: data.keywordAnalysis || null,
             interpretation: {
-              summary: data.answer,
+              summary: data.data.summary || 'Analyse temporelle',
               insights: [],
               recommendations: [],
               anomalies: [],
               trends: []
             }
           };
-        } else {
+        } else if (data.type === 'conversation' && data.data && data.data.message) {
+          // Réponse conversationnelle
           botMessage = {
             id: (Date.now() + 1).toString(),
-            text: data.answer || data.summary || data.message || 'Réponse reçue.',
+            text: data.data.message,
             sender: 'bot',
             timestamp: new Date(),
             type: 'message',
-            summary: data.summary || data.answer || data.message,
+            summary: data.data.message,
             keywords: data.keywords || [],
             keywordAnalysis: data.keywordAnalysis || null,
-            explanation: data.explanation,
-            interpretation: data.interpretation
+            interpretation: {
+              summary: data.data.message,
+              insights: [],
+              recommendations: [],
+              anomalies: [],
+              trends: []
+            }
+          };
+        } else if (data.data && data.data.summary) {
+          // Réponse avec données structurées
+          botMessage = {
+            id: (Date.now() + 1).toString(),
+            text: data.data.summary,
+            sender: 'bot',
+            timestamp: new Date(),
+            type: 'message',
+            summary: data.data.summary,
+            keywords: data.keywords || [],
+            keywordAnalysis: data.keywordAnalysis || null,
+            explanation: data.data.explanation,
+            interpretation: data.data.interpretation
+          };
+        } else {
+          // Réponse par défaut
+          botMessage = {
+            id: (Date.now() + 1).toString(),
+            text: data.message || data.data?.message || 'Réponse reçue.',
+            sender: 'bot',
+            timestamp: new Date(),
+            type: 'message',
+            summary: data.message || data.data?.message || 'Réponse reçue.',
+            keywords: data.keywords || [],
+            keywordAnalysis: data.keywordAnalysis || null,
+            explanation: data.data?.explanation,
+            interpretation: data.data?.interpretation
           };
         }
         setMessages(prev => [...prev, botMessage]);

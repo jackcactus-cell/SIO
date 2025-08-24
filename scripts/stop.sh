@@ -1,271 +1,243 @@
 #!/bin/bash
 
-# Script d'Arrêt SIO
-# Auteur: Assistant IA
+# =============================================================================
+# Script d'arrêt des services SIO
+# =============================================================================
 
-set -e
+set -euo pipefail
 
-# Couleurs
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# Source des utilitaires
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/utils/docker-utils.sh"
+source "$SCRIPT_DIR/utils/backup-utils.sh"
 
-print_info() {
-    echo -e "${GREEN}✅ $1${NC}"
-}
+# Configuration
+readonly STOP_LOG_FILE="logs/stop.log"
 
-print_warning() {
-    echo -e "${YELLOW}⚠️  $1${NC}"
-}
+# =============================================================================
+# Fonctions d'arrêt
+# =============================================================================
 
-print_error() {
-    echo -e "${RED}❌ $1${NC}"
-}
-
-print_header() {
-    echo -e "${BLUE}📋 $1${NC}"
-    echo "============================================="
-}
-
-# Fonction d'aide
-show_help() {
-    echo "Usage: $0 [options]"
-    echo ""
-    echo "Options:"
-    echo "  --force, -f           - Forcer l'arrêt (kill)"
-    echo "  --volumes, -v         - Supprimer aussi les volumes"
-    echo "  --images, -i          - Supprimer aussi les images"
-    echo "  --all, -a             - Arrêt complet (volumes + images)"
-    echo "  --help, -h            - Afficher cette aide"
-    echo ""
-    echo "Exemples:"
-    echo "  $0                    # Arrêt normal"
-    echo "  $0 --force            # Forcer l'arrêt"
-    echo "  $0 --volumes          # Arrêter et supprimer les volumes"
-    echo "  $0 --all              # Arrêt complet"
-}
-
-# Variables
-FORCE=false
-REMOVE_VOLUMES=false
-REMOVE_IMAGES=false
-
-# Traitement des arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --help|-h)
-            show_help
-            exit 0
-            ;;
-        --force|-f)
-            FORCE=true
-            shift
-            ;;
-        --volumes|-v)
-            REMOVE_VOLUMES=true
-            shift
-            ;;
-        --images|-i)
-            REMOVE_IMAGES=true
-            shift
-            ;;
-        --all|-a)
-            REMOVE_VOLUMES=true
-            REMOVE_IMAGES=true
-            shift
-            ;;
-        *)
-            print_error "Option inconnue: $1"
-            show_help
-            exit 1
-            ;;
-    esac
-done
-
-# Vérifications
-if ! command -v docker &> /dev/null; then
-    print_error "Docker n'est pas installé"
-    exit 1
-fi
-
-if ! command -v docker-compose &> /dev/null; then
-    print_error "Docker Compose n'est pas installé"
-    exit 1
-fi
-
-if [ ! -f "config/docker/docker-compose.yml" ]; then
-    print_error "Fichier docker-compose.yml non trouvé"
-    exit 1
-fi
-
-# Vérifier si des services sont en cours d'exécution
 check_running_services() {
-    local running_services=$(docker-compose -f config/docker/docker-compose.yml ps --services --filter "status=running" 2>/dev/null || echo "")
-    if [ -z "$running_services" ]; then
-        print_warning "Aucun service SIO n'est en cours d'exécution"
+    log_info "Vérification des services en cours d'exécution..."
+    
+    local running_services=$(docker_compose_cmd ps --quiet)
+    
+    if [[ -z "$running_services" ]]; then
+        log_info "Aucun service en cours d'exécution"
         return 1
     fi
+    
+    log_info "Services en cours d'exécution:"
+    docker_compose_cmd ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
     return 0
 }
 
-# Arrêter les services
-stop_services() {
-    print_header "Arrêt des Services"
+create_pre_stop_backup() {
+    log_info "Création d'une sauvegarde avant arrêt..."
     
-    if [ "$FORCE" = true ]; then
-        print_step "Arrêt forcé des conteneurs"
-        docker-compose -f config/docker/docker-compose.yml kill 2>/dev/null || true
+    local backup_dir="backups/pre_stop_$(date +%Y%m%d_%H%M%S)"
+    
+    if create_full_backup "$backup_dir"; then
+        log_success "Sauvegarde créée: $backup_dir"
+        return 0
     else
-        print_step "Arrêt gracieux des conteneurs"
-        docker-compose -f config/docker/docker-compose.yml stop 2>/dev/null || true
-    fi
-    
-    print_step "Suppression des conteneurs"
-    docker-compose -f config/docker/docker-compose.yml down 2>/dev/null || true
-    
-    print_info "Services arrêtés"
-}
-
-# Supprimer les volumes si demandé
-remove_volumes() {
-    if [ "$REMOVE_VOLUMES" = true ]; then
-        print_header "Suppression des Volumes"
-        
-        print_step "Suppression des volumes SIO"
-        docker volume rm sio_mongodb_data sio_backend_data sio_python_logs sio_python_cache 2>/dev/null || true
-        
-        print_info "Volumes supprimés"
+        log_warning "Échec de la création de la sauvegarde"
+        return 1
     fi
 }
 
-# Supprimer les images si demandé
-remove_images() {
-    if [ "$REMOVE_IMAGES" = true ]; then
-        print_header "Suppression des Images"
-        
-        print_step "Suppression des images SIO"
-        docker rmi sio-frontend:latest sio-backend-node:latest sio-backend-python:latest sio-backend-llm:latest 2>/dev/null || true
-        
-        print_info "Images supprimées"
-    fi
-}
-
-# Nettoyer les ressources Docker
-cleanup_docker() {
-    print_header "Nettoyage Docker"
+stop_services_gracefully() {
+    log_info "Arrêt gracieux des services..."
     
-    print_step "Suppression des conteneurs arrêtés"
-    docker container prune -f 2>/dev/null || true
+    # Arrêter les services dans l'ordre inverse
+    local services=(
+        "frontend"
+        "mongo-express"
+        "backend_llm"
+        "backend"
+        "backend_python"
+        "mongodb"
+    )
     
-    print_step "Suppression des réseaux non utilisés"
-    docker network prune -f 2>/dev/null || true
-    
-    if [ "$REMOVE_VOLUMES" = true ]; then
-        print_step "Suppression des volumes non utilisés"
-        docker volume prune -f 2>/dev/null || true
-    fi
-    
-    print_info "Nettoyage terminé"
-}
-
-# Vérifier l'état final
-verify_stop() {
-    print_header "Vérification de l'Arrêt"
-    
-    local running_services=$(docker-compose -f config/docker/docker-compose.yml ps --services --filter "status=running" 2>/dev/null || echo "")
-    
-    if [ -z "$running_services" ]; then
-        print_info "Tous les services SIO sont arrêtés"
-    else
-        print_warning "Certains services sont encore en cours d'exécution:"
-        echo "$running_services" | while read -r service; do
-            if [ -n "$service" ]; then
-                echo "  • $service"
+    for service in "${services[@]}"; do
+        if docker_compose_cmd ps "$service" --quiet | grep -q .; then
+            log_info "Arrêt de $service..."
+            if ! docker_compose_cmd stop "$service"; then
+                log_warning "Échec de l'arrêt gracieux de $service"
             fi
-        done
-    fi
-    
-    # Vérifier les ports
-    echo ""
-    print_step "Vérification des ports"
-    
-    local ports=(80 4000 8000 8001 27017)
-    for port in "${ports[@]}"; do
-        if netstat -tulpn 2>/dev/null | grep -q ":$port "; then
-            print_warning "Port $port encore utilisé"
-        else
-            print_info "Port $port libre"
         fi
     done
+    
+    log_success "Arrêt gracieux terminé"
+    return 0
 }
 
-# Affichage des informations finales
-show_final_info() {
-    print_header "Arrêt Terminé"
+stop_services_force() {
+    log_info "Arrêt forcé des services..."
     
-    echo -e "${GREEN}🎉 Vos services SIO ont été arrêtés !${NC}"
-    echo ""
-    
-    if [ "$REMOVE_VOLUMES" = true ]; then
-        echo -e "${YELLOW}⚠️  ATTENTION : Les volumes ont été supprimés${NC}"
-        echo "   Les données MongoDB ont été perdues"
+    if ! stop_services; then
+        log_error "Échec de l'arrêt des services"
+        return 1
     fi
     
-    if [ "$REMOVE_IMAGES" = true ]; then
-        echo -e "${YELLOW}⚠️  ATTENTION : Les images ont été supprimées${NC}"
-        echo "   Vous devrez les reconstruire au prochain démarrage"
-    fi
-    
-    echo ""
-    echo -e "${PURPLE}🔧 Commandes utiles :${NC}"
-    echo "   ./scripts/start.sh    # Redémarrer les services"
-    echo "   ./scripts/status.sh   # Vérifier l'état"
-    echo "   docker ps             # Voir tous les conteneurs"
-    echo "   docker volume ls      # Voir les volumes"
-    echo "   docker image ls       # Voir les images"
+    log_success "Services arrêtés"
+    return 0
 }
 
+wait_for_services_stop() {
+    log_info "Attente de l'arrêt des services..."
+    
+    local timeout=60
+    local elapsed=0
+    
+    while [[ $elapsed -lt $timeout ]]; do
+        if ! docker_compose_cmd ps --quiet | grep -q .; then
+            log_success "Tous les services sont arrêtés"
+            return 0
+        fi
+        
+        log_info "Attente... ($elapsed/$timeout secondes)"
+        sleep 2
+        ((elapsed += 2))
+    done
+    
+    log_warning "Timeout lors de l'arrêt des services"
+    return 1
+}
+
+cleanup_containers() {
+    log_info "Nettoyage des conteneurs..."
+    
+    # Supprimer les conteneurs arrêtés
+    local stopped_containers=$(docker ps -a --filter "status=exited" --filter "label=com.docker.compose.project=sio" --format "{{.ID}}")
+    
+    if [[ -n "$stopped_containers" ]]; then
+        log_info "Suppression des conteneurs arrêtés..."
+        echo "$stopped_containers" | xargs -r docker rm -f
+    fi
+    
+    # Nettoyer les conteneurs orphelins
+    cleanup_containers
+    
+    log_success "Nettoyage terminé"
+}
+
+display_stop_summary() {
+    echo
+    echo "=========================================="
+    echo "  Résumé de l'arrêt des services"
+    echo "=========================================="
+    echo
+    
+    # Afficher les conteneurs restants
+    local remaining_containers=$(docker ps -a --filter "label=com.docker.compose.project=sio" --format "{{.Names}}\t{{.Status}}")
+    
+    if [[ -n "$remaining_containers" ]]; then
+        echo "Conteneurs restants:"
+        echo "$remaining_containers"
+    else
+        echo "Aucun conteneur restant"
+    fi
+    
+    echo
+    echo "Volumes conservés:"
+    docker volume ls --filter "label=com.docker.compose.project=sio" --format "table {{.Name}}\t{{.Driver}}"
+    
+    echo
+    echo "Réseaux conservés:"
+    docker network ls --filter "label=com.docker.compose.project=sio" --format "table {{.Name}}\t{{.Driver}}"
+    
+    echo
+    echo "Ressources système libérées:"
+    echo "  CPU: $(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | sed 's/%us,//')%"
+    echo "  Mémoire: $(free -m | awk 'NR==2{printf "%.1f%%", $3*100/$2}')"
+    echo "  Disque: $(df . | awk 'NR==2 {print $5}') utilisé"
+    echo
+}
+
+# =============================================================================
 # Fonction principale
+# =============================================================================
+
 main() {
-    echo -e "${BLUE}🛑 Arrêt des Services SIO${NC}"
-    echo "============================================="
-    echo ""
+    echo "=========================================="
+    echo "  Arrêt des services SIO"
+    echo "=========================================="
+    echo
     
-    # Vérifier si des services sont en cours d'exécution
+    # Créer le répertoire de logs
+    mkdir -p "$(dirname "$STOP_LOG_FILE")"
+    
+    # Vérifier les services en cours d'exécution
     if ! check_running_services; then
-        print_info "Aucun service à arrêter"
+        log_info "Aucun service à arrêter"
         exit 0
     fi
     
-    # Confirmation pour les actions destructives
-    if [ "$REMOVE_VOLUMES" = true ] || [ "$REMOVE_IMAGES" = true ]; then
-        echo -e "${YELLOW}⚠️  ATTENTION : Actions destructives demandées${NC}"
-        if [ "$REMOVE_VOLUMES" = true ]; then
-            echo "   - Suppression des volumes (données perdues)"
-        fi
-        if [ "$REMOVE_IMAGES" = true ]; then
-            echo "   - Suppression des images"
-        fi
-        echo ""
-        read -p "Êtes-vous sûr de vouloir continuer ? (y/N): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            print_info "Arrêt annulé"
-            exit 0
-        fi
+    # Demander confirmation
+    echo "Les services suivants vont être arrêtés:"
+    docker_compose_cmd ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
+    echo
+    
+    read -p "Continuer? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        log_info "Arrêt annulé"
+        exit 0
     fi
     
-    stop_services
-    remove_volumes
-    remove_images
-    cleanup_docker
-    verify_stop
-    show_final_info
+    # Créer une sauvegarde avant arrêt
+    create_pre_stop_backup
+    
+    # Choisir le mode d'arrêt
+    local stop_mode="graceful"
+    if [[ "${1:-}" == "--force" ]]; then
+        stop_mode="force"
+    fi
+    
+    # Arrêter les services
+    case "$stop_mode" in
+        "graceful")
+            if ! stop_services_gracefully; then
+                log_warning "Arrêt gracieux partiellement échoué"
+            fi
+            ;;
+        "force")
+            if ! stop_services_force; then
+                log_error "Échec de l'arrêt forcé"
+                exit 1
+            fi
+            ;;
+    esac
+    
+    # Attendre que les services s'arrêtent
+    if ! wait_for_services_stop; then
+        log_warning "Certains services n'ont pas pu être arrêtés proprement"
+    fi
+    
+    # Nettoyer les conteneurs
+    cleanup_containers
+    
+    # Afficher le résumé
+    display_stop_summary
+    
+    echo "=========================================="
+    echo "  Services arrêtés avec succès!"
+    echo "=========================================="
+    echo
+    echo "Commandes utiles:"
+    echo "  Démarrer:    ./scripts/start.sh"
+    echo "  Redémarrer:  ./scripts/restart.sh"
+    echo "  Nettoyer:    ./scripts/cleanup.sh"
+    echo "  Sauvegarde:  ./scripts/backup.sh"
+    echo
 }
 
+# =============================================================================
 # Exécution du script
-main "$@"
+# =============================================================================
 
-
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

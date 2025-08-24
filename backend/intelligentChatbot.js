@@ -36,6 +36,14 @@ class IntelligentChatbot {
     try {
       const normalizedMessage = message.toLowerCase().trim();
       
+      // Vérifier si c'est une question temporelle
+      const timeKeywords = ['jour', 'journée', 'date', 'temps', 'heure', 'période', 'activité', 'quand', 'moment'];
+      const isTimeQuestion = timeKeywords.some(keyword => normalizedMessage.includes(keyword));
+      
+      if (isTimeQuestion) {
+        return { type: 'time_question', confidence: 0.9 };
+      }
+      
       // Vérifier si c'est une salutation
       for (const pattern of this.greetingPatterns) {
         if (pattern.test(normalizedMessage)) {
@@ -523,6 +531,241 @@ N'hésitez pas à me poser vos questions ! 😊`,
     }
   }
 
+  // Analyser les données temporelles
+  analyzeTimeData(auditData, question) {
+    try {
+      if (!auditData || !Array.isArray(auditData) || auditData.length === 0) {
+        return {
+          type: 'time_analysis',
+          message: "Aucune donnée temporelle disponible pour l'analyse.",
+          data: null
+        };
+      }
+
+      const normalizedQuestion = question.toLowerCase();
+      
+      // Analyser par jour
+      if (normalizedQuestion.includes('jour') || normalizedQuestion.includes('journée')) {
+        return this.analyzeDailyActivity(auditData);
+      }
+      
+      // Analyser par heure
+      if (normalizedQuestion.includes('heure') || normalizedQuestion.includes('pic')) {
+        return this.analyzeHourlyActivity(auditData);
+      }
+      
+      // Analyser la période
+      if (normalizedQuestion.includes('période') || normalizedQuestion.includes('date')) {
+        return this.analyzeTimePeriod(auditData);
+      }
+      
+      // Analyse temporelle générale
+      return this.analyzeGeneralTimeActivity(auditData);
+      
+    } catch (error) {
+      console.error('Erreur lors de l\'analyse temporelle:', error);
+      return {
+        type: 'time_analysis',
+        message: "Erreur lors de l'analyse temporelle des données.",
+        data: null
+      };
+    }
+  }
+
+  // Analyser l'activité par jour
+  analyzeDailyActivity(auditData) {
+    try {
+      const dailyActivity = {};
+      
+      auditData.forEach(record => {
+        if (record.EVENT_TIMESTAMP || record.event_timestamp) {
+          const date = new Date(record.EVENT_TIMESTAMP || record.event_timestamp);
+          const dayKey = date.toDateString();
+          
+          if (!dailyActivity[dayKey]) {
+            dailyActivity[dayKey] = {
+              date: dayKey,
+              count: 0,
+              users: new Set(),
+              actions: new Set(),
+              objects: new Set()
+            };
+          }
+          
+          dailyActivity[dayKey].count++;
+          if (record.DBUSERNAME || record.dbusername) {
+            dailyActivity[dayKey].users.add(record.DBUSERNAME || record.dbusername);
+          }
+          if (record.ACTION_NAME || record.action_name) {
+            dailyActivity[dayKey].actions.add(record.ACTION_NAME || record.action_name);
+          }
+          if (record.OBJECT_NAME || record.object_name) {
+            dailyActivity[dayKey].objects.add(record.OBJECT_NAME || record.object_name);
+          }
+        }
+      });
+      
+      // Convertir les Sets en tableaux
+      Object.values(dailyActivity).forEach(day => {
+        day.users = Array.from(day.users);
+        day.actions = Array.from(day.actions);
+        day.objects = Array.from(day.objects);
+      });
+      
+      // Trouver le jour le plus actif
+      const sortedDays = Object.values(dailyActivity).sort((a, b) => b.count - a.count);
+      const mostActiveDay = sortedDays[0];
+      
+      return {
+        type: 'daily_analysis',
+        message: `Analyse de l'activité par jour :`,
+        data: {
+          mostActiveDay: mostActiveDay,
+          allDays: sortedDays,
+          summary: `Le jour le plus actif est ${mostActiveDay.date} avec ${mostActiveDay.count} actions par ${mostActiveDay.users.length} utilisateurs.`
+        }
+      };
+      
+    } catch (error) {
+      console.error('Erreur lors de l\'analyse quotidienne:', error);
+      return {
+        type: 'daily_analysis',
+        message: "Erreur lors de l'analyse de l'activité quotidienne.",
+        data: null
+      };
+    }
+  }
+
+  // Analyser l'activité par heure
+  analyzeHourlyActivity(auditData) {
+    try {
+      const hourlyActivity = {};
+      
+      // Initialiser les 24 heures
+      for (let i = 0; i < 24; i++) {
+        hourlyActivity[i] = {
+          hour: i,
+          count: 0,
+          users: new Set(),
+          actions: new Set()
+        };
+      }
+      
+      auditData.forEach(record => {
+        if (record.EVENT_TIMESTAMP || record.event_timestamp) {
+          const date = new Date(record.EVENT_TIMESTAMP || record.event_timestamp);
+          const hour = date.getHours();
+          
+          hourlyActivity[hour].count++;
+          if (record.DBUSERNAME || record.dbusername) {
+            hourlyActivity[hour].users.add(record.DBUSERNAME || record.dbusername);
+          }
+          if (record.ACTION_NAME || record.action_name) {
+            hourlyActivity[hour].actions.add(record.ACTION_NAME || record.action_name);
+          }
+        }
+      });
+      
+      // Convertir les Sets en tableaux
+      Object.values(hourlyActivity).forEach(hour => {
+        hour.users = Array.from(hour.users);
+        hour.actions = Array.from(hour.actions);
+      });
+      
+      // Trouver l'heure de pointe
+      const peakHour = Object.values(hourlyActivity).reduce((max, hour) => 
+        hour.count > max.count ? hour : max
+      );
+      
+      return {
+        type: 'hourly_analysis',
+        message: `Analyse de l'activité par heure :`,
+        data: {
+          peakHour: peakHour,
+          allHours: Object.values(hourlyActivity),
+          summary: `L'heure de pointe est ${peakHour.hour}h avec ${peakHour.count} actions par ${peakHour.users.length} utilisateurs.`
+        }
+      };
+      
+    } catch (error) {
+      console.error('Erreur lors de l\'analyse horaire:', error);
+      return {
+        type: 'hourly_analysis',
+        message: "Erreur lors de l'analyse de l'activité horaire.",
+        data: null
+      };
+    }
+  }
+
+  // Analyser la période temporelle
+  analyzeTimePeriod(auditData) {
+    try {
+      const timestamps = auditData
+        .filter(record => record.EVENT_TIMESTAMP || record.event_timestamp)
+        .map(record => new Date(record.EVENT_TIMESTAMP || record.event_timestamp));
+      
+      if (timestamps.length === 0) {
+        return {
+          type: 'period_analysis',
+          message: "Aucune donnée temporelle disponible.",
+          data: null
+        };
+      }
+      
+      const minDate = new Date(Math.min(...timestamps));
+      const maxDate = new Date(Math.max(...timestamps));
+      const durationDays = Math.ceil((maxDate - maxDate) / (1000 * 60 * 60 * 24));
+      
+      return {
+        type: 'period_analysis',
+        message: `Période couverte par les données :`,
+        data: {
+          startDate: minDate.toDateString(),
+          endDate: maxDate.toDateString(),
+          durationDays: durationDays,
+          totalRecords: timestamps.length,
+          summary: `Les données couvrent ${durationDays} jours du ${minDate.toDateString()} au ${maxDate.toDateString()} avec ${timestamps.length} événements.`
+        }
+      };
+      
+    } catch (error) {
+      console.error('Erreur lors de l\'analyse de période:', error);
+      return {
+        type: 'period_analysis',
+        message: "Erreur lors de l'analyse de la période temporelle.",
+        data: null
+      };
+    }
+  }
+
+  // Analyse temporelle générale
+  analyzeGeneralTimeActivity(auditData) {
+    try {
+      const dailyAnalysis = this.analyzeDailyActivity(auditData);
+      const hourlyAnalysis = this.analyzeHourlyActivity(auditData);
+      const periodAnalysis = this.analyzeTimePeriod(auditData);
+      
+      return {
+        type: 'general_time_analysis',
+        message: `Analyse temporelle complète :`,
+        data: {
+          daily: dailyAnalysis.data,
+          hourly: hourlyAnalysis.data,
+          period: periodAnalysis.data,
+          summary: `${periodAnalysis.data?.totalRecords || 0} événements analysés sur ${periodAnalysis.data?.durationDays || 0} jours. Jour le plus actif : ${dailyAnalysis.data?.mostActiveDay?.date || 'N/A'}. Heure de pointe : ${hourlyAnalysis.data?.peakHour?.hour || 'N/A'}h.`
+        }
+      };
+      
+    } catch (error) {
+      console.error('Erreur lors de l\'analyse temporelle générale:', error);
+      return {
+        type: 'general_time_analysis',
+        message: "Erreur lors de l'analyse temporelle générale.",
+        data: null
+      };
+    }
+  }
+
   // Traiter un message et générer une réponse
   processMessage(message, auditData = []) {
     try {
@@ -551,6 +794,20 @@ N'hésitez pas à me poser vos questions ! 😊`,
           
         case 'help':
           response = this.generateHelpResponse();
+          break;
+          
+        case 'time_question':
+          // Traiter les questions temporelles spécifiquement
+          const timeAnalysis = this.analyzeTimeData(auditData, message);
+          response = {
+            type: 'time_analysis',
+            message: timeAnalysis.message,
+            data: timeAnalysis.data,
+            shouldProcessWithExistingSystem: false,
+            confidence: 0.9,
+            keywords: keywords,
+            keywordAnalysis: this.generateKeywordAnalysis(keywords)
+          };
           break;
           
         case 'question':

@@ -1,179 +1,356 @@
 #!/bin/bash
 
-# Script de Logs SIO
-# Auteur: Assistant IA
+# =============================================================================
+# Script de gestion des logs pour le projet SIO
+# =============================================================================
 
-set -e
+set -euo pipefail
 
-# Couleurs
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+# Source des utilitaires
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/utils/docker-utils.sh"
 
-print_info() {
-    echo -e "${GREEN}✅ $1${NC}"
-}
+# Configuration
+readonly LOGS_DIR="logs"
+readonly MAX_LOG_LINES=1000
 
-print_warning() {
-    echo -e "${YELLOW}⚠️  $1${NC}"
-}
+# =============================================================================
+# Fonctions de gestion des logs
+# =============================================================================
 
-print_error() {
-    echo -e "${RED}❌ $1${NC}"
-}
-
-print_header() {
-    echo -e "${BLUE}📋 $1${NC}"
-    echo "============================================="
-}
-
-# Fonction d'aide
 show_help() {
-    echo "Usage: $0 [service] [options]"
-    echo ""
-    echo "Services:"
-    echo "  all                    - Tous les services (défaut)"
-    echo "  frontend               - Frontend React"
-    echo "  backend-node           - Backend Node.js"
-    echo "  backend-python         - Backend Python"
-    echo "  backend-llm            - Backend LLM"
-    echo "  mongodb                - MongoDB"
-    echo ""
+    echo "Usage: $0 [OPTION] [SERVICE]"
+    echo
     echo "Options:"
-    echo "  --follow, -f           - Suivre les logs en temps réel"
-    echo "  --tail N, -t N         - Afficher les N dernières lignes (défaut: 50)"
-    echo "  --since TIME           - Logs depuis TIME (ex: 1h, 30m, 2024-01-01)"
-    echo "  --help, -h             - Afficher cette aide"
-    echo ""
+    echo "  -a, --all           Afficher les logs de tous les services"
+    echo "  -f, --follow        Suivre les logs en temps réel"
+    echo "  -n, --lines N       Afficher les N dernières lignes (défaut: 50)"
+    echo "  -e, --errors        Afficher seulement les erreurs"
+    echo "  -s, --since TIME    Afficher les logs depuis TIME (ex: 1h, 2d)"
+    echo "  -u, --until TIME    Afficher les logs jusqu'à TIME"
+    echo "  --save FILE         Sauvegarder les logs dans FILE"
+    echo "  --clean             Nettoyer les anciens logs"
+    echo "  --rotate            Rotation des logs"
+    echo "  --stats             Statistiques des logs"
+    echo "  -h, --help          Afficher cette aide"
+    echo
+    echo "Services disponibles:"
+    echo "  frontend           Frontend React/Vite"
+    echo "  backend            Backend Node.js"
+    echo "  backend_python     Backend Python (FastAPI)"
+    echo "  backend_llm        Backend LLM"
+    echo "  mongodb            Base de données MongoDB"
+    echo "  mongo-express      Interface web MongoDB"
+    echo
     echo "Exemples:"
-    echo "  $0                     # Logs de tous les services"
-    echo "  $0 frontend            # Logs du frontend"
-    echo "  $0 --follow            # Suivre tous les logs"
-    echo "  $0 backend-python -t 100  # 100 dernières lignes du backend Python"
+    echo "  $0                    # Logs de tous les services (50 dernières lignes)"
+    echo "  $0 -f                 # Suivre tous les logs en temps réel"
+    echo "  $0 backend_python     # Logs du backend Python"
+    echo "  $0 -n 100 -e          # 100 dernières erreurs de tous les services"
+    echo "  $0 -s 1h --save logs.txt  # Logs de la dernière heure sauvegardés"
 }
 
-# Variables par défaut
-SERVICE="all"
-FOLLOW=false
-TAIL_LINES=50
-SINCE=""
+get_all_services() {
+    docker_compose_cmd ps --services
+}
 
-# Traitement des arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --help|-h)
-            show_help
-            exit 0
-            ;;
-        --follow|-f)
-            FOLLOW=true
-            shift
-            ;;
-        --tail|-t)
-            TAIL_LINES="$2"
-            shift 2
-            ;;
-        --since)
-            SINCE="$2"
-            shift 2
-            ;;
-        all|frontend|backend-node|backend-python|backend-llm|mongodb)
-            SERVICE="$1"
-            shift
-            ;;
-        *)
-            print_error "Option inconnue: $1"
-            show_help
-            exit 1
-            ;;
-    esac
-done
-
-# Vérifications
-if ! command -v docker &> /dev/null; then
-    print_error "Docker n'est pas installé"
-    exit 1
-fi
-
-if ! command -v docker-compose &> /dev/null; then
-    print_error "Docker Compose n'est pas installé"
-    exit 1
-fi
-
-if [ ! -f "config/docker/docker-compose.yml" ]; then
-    print_error "Fichier docker-compose.yml non trouvé"
-    exit 1
-fi
-
-# Construction des options Docker
-DOCKER_OPTS="--tail $TAIL_LINES"
-if [ "$FOLLOW" = true ]; then
-    DOCKER_OPTS="$DOCKER_OPTS --follow"
-fi
-if [ -n "$SINCE" ]; then
-    DOCKER_OPTS="$DOCKER_OPTS --since $SINCE"
-fi
-
-# Fonction pour afficher les logs d'un service
-show_service_logs() {
-    local service_name="$1"
-    local container_name="$2"
+show_logs() {
+    local service="$1"
+    local lines="${2:-50}"
+    local follow="${3:-false}"
+    local since="${4:-}"
+    local until="${5:-}"
+    local errors_only="${6:-false}"
     
-    print_header "Logs de $service_name"
+    local cmd_args=()
     
-    if docker ps | grep -q "$container_name"; then
-        docker logs $DOCKER_OPTS "$container_name" 2>/dev/null || print_warning "Impossible de récupérer les logs"
-    else
-        print_warning "Conteneur $container_name non trouvé ou arrêté"
+    # Ajouter les arguments selon les options
+    if [[ "$follow" == "true" ]]; then
+        cmd_args+=("-f")
     fi
     
-    echo ""
+    if [[ -n "$since" ]]; then
+        cmd_args+=("--since=$since")
+    fi
+    
+    if [[ -n "$until" ]]; then
+        cmd_args+=("--until=$until")
+    fi
+    
+    if [[ "$errors_only" == "true" ]]; then
+        cmd_args+=("--tail=$lines")
+        # Filtrer les erreurs après récupération
+        docker_compose_cmd logs "${cmd_args[@]}" "$service" 2>&1 | grep -i "error\|exception\|failed\|critical" || true
+    else
+        cmd_args+=("--tail=$lines")
+        docker_compose_cmd logs "${cmd_args[@]}" "$service"
+    fi
 }
 
-# Affichage principal
-echo -e "${BLUE}📋 Logs des Services SIO${NC}"
-echo "============================================="
-echo ""
+show_all_logs() {
+    local lines="${1:-50}"
+    local follow="${2:-false}"
+    local since="${3:-}"
+    local until="${4:-}"
+    local errors_only="${5:-false}"
+    
+    local services=($(get_all_services))
+    
+    for service in "${services[@]}"; do
+        echo "=========================================="
+        echo "  Logs de $service"
+        echo "=========================================="
+        echo
+        
+        show_logs "$service" "$lines" "$follow" "$since" "$until" "$errors_only"
+        
+        echo
+        echo
+    done
+}
 
-if [ "$FOLLOW" = true ]; then
-    echo -e "${CYAN}🔄 Mode suivi en temps réel activé (Ctrl+C pour arrêter)${NC}"
-    echo ""
-fi
+save_logs() {
+    local output_file="$1"
+    local lines="${2:-50}"
+    local since="${3:-}"
+    local until="${4:-}"
+    
+    log_info "Sauvegarde des logs dans $output_file..."
+    
+    # Créer le répertoire parent si nécessaire
+    local output_dir=$(dirname "$output_file")
+    if [[ ! -d "$output_dir" ]]; then
+        mkdir -p "$output_dir"
+    fi
+    
+    # Sauvegarder les logs
+    {
+        echo "=== LOGS SIO - $(date) ==="
+        echo
+        
+        local services=($(get_all_services))
+        
+        for service in "${services[@]}"; do
+            echo "=== $service ==="
+            show_logs "$service" "$lines" "false" "$since" "$until" "false"
+            echo
+        done
+        
+    } > "$output_file"
+    
+    log_success "Logs sauvegardés dans $output_file"
+}
 
-# Affichage selon le service demandé
-case $SERVICE in
-    all)
-        show_service_logs "Frontend" "sio_frontend_prod"
-        show_service_logs "Backend Node.js" "sio_backend_node_prod"
-        show_service_logs "Backend Python" "sio_backend_python_prod"
-        show_service_logs "Backend LLM" "sio_backend_llm_prod"
-        show_service_logs "MongoDB" "sio_mongodb_prod"
-        ;;
-    frontend)
-        show_service_logs "Frontend" "sio_frontend_prod"
-        ;;
-    backend-node)
-        show_service_logs "Backend Node.js" "sio_backend_node_prod"
-        ;;
-    backend-python)
-        show_service_logs "Backend Python" "sio_backend_python_prod"
-        ;;
-    backend-llm)
-        show_service_logs "Backend LLM" "sio_backend_llm_prod"
-        ;;
-    mongodb)
-        show_service_logs "MongoDB" "sio_mongodb_prod"
-        ;;
-    *)
-        print_error "Service inconnu: $SERVICE"
-        show_help
+clean_logs() {
+    log_info "Nettoyage des anciens logs..."
+    
+    # Nettoyer les logs Docker
+    docker system prune -f --volumes
+    
+    # Nettoyer les fichiers de logs locaux
+    if [[ -d "$LOGS_DIR" ]]; then
+        find "$LOGS_DIR" -name "*.log" -mtime +7 -delete
+        log_info "Logs locaux nettoyés"
+    fi
+    
+    log_success "Nettoyage des logs terminé"
+}
+
+rotate_logs() {
+    log_info "Rotation des logs..."
+    
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local rotated_dir="$LOGS_DIR/rotated_$timestamp"
+    
+    # Créer le répertoire de rotation
+    mkdir -p "$rotated_dir"
+    
+    # Sauvegarder les logs actuels
+    save_logs "$rotated_dir/all_logs.log" 1000
+    
+    # Nettoyer les logs Docker
+    docker system prune -f --volumes
+    
+    log_success "Rotation des logs terminée: $rotated_dir"
+}
+
+show_log_stats() {
+    log_info "Statistiques des logs..."
+    
+    echo "=== STATISTIQUES DES LOGS ==="
+    echo
+    
+    local services=($(get_all_services))
+    
+    for service in "${services[@]}"; do
+        echo "Service: $service"
+        
+        # Nombre total de lignes
+        local total_lines=$(docker_compose_cmd logs --no-color "$service" 2>/dev/null | wc -l)
+        echo "  Total de lignes: $total_lines"
+        
+        # Nombre d'erreurs
+        local error_lines=$(docker_compose_cmd logs --no-color "$service" 2>/dev/null | grep -i "error\|exception\|failed\|critical" | wc -l)
+        echo "  Erreurs: $error_lines"
+        
+        # Taille des logs
+        local log_size=$(docker_compose_cmd logs --no-color "$service" 2>/dev/null | wc -c)
+        echo "  Taille: $(numfmt --to=iec $log_size)"
+        
+        # Dernière activité
+        local last_activity=$(docker_compose_cmd logs --no-color --tail=1 "$service" 2>/dev/null | head -1 | cut -d' ' -f1-2 || echo "Aucune")
+        echo "  Dernière activité: $last_activity"
+        
+        echo
+    done
+    
+    # Statistiques globales
+    echo "=== STATISTIQUES GLOBALES ==="
+    echo
+    
+    local total_logs=$(docker_compose_cmd logs --no-color 2>/dev/null | wc -l)
+    local total_errors=$(docker_compose_cmd logs --no-color 2>/dev/null | grep -i "error\|exception\|failed\|critical" | wc -l)
+    local total_size=$(docker_compose_cmd logs --no-color 2>/dev/null | wc -c)
+    
+    echo "Total de lignes: $total_logs"
+    echo "Total d'erreurs: $total_errors"
+    echo "Taille totale: $(numfmt --to=iec $total_size)"
+    
+    if [[ $total_logs -gt 0 ]]; then
+        local error_rate=$((total_errors * 100 / total_logs))
+        echo "Taux d'erreur: ${error_rate}%"
+    fi
+}
+
+# =============================================================================
+# Fonction principale
+# =============================================================================
+
+main() {
+    # Variables par défaut
+    local service=""
+    local lines=50
+    local follow=false
+    local since=""
+    local until=""
+    local errors_only=false
+    local save_file=""
+    local clean_logs=false
+    local rotate_logs=false
+    local show_stats=false
+    
+    # Parser les arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -a|--all)
+                service="all"
+                shift
+                ;;
+            -f|--follow)
+                follow=true
+                shift
+                ;;
+            -n|--lines)
+                lines="$2"
+                shift 2
+                ;;
+            -e|--errors)
+                errors_only=true
+                shift
+                ;;
+            -s|--since)
+                since="$2"
+                shift 2
+                ;;
+            -u|--until)
+                until="$2"
+                shift 2
+                ;;
+            --save)
+                save_file="$2"
+                shift 2
+                ;;
+            --clean)
+                clean_logs=true
+                shift
+                ;;
+            --rotate)
+                rotate_logs=true
+                shift
+                ;;
+            --stats)
+                show_stats=true
+                shift
+                ;;
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            -*)
+                echo "Option inconnue: $1"
+                show_help
+                exit 1
+                ;;
+            *)
+                if [[ -z "$service" ]]; then
+                    service="$1"
+                else
+                    echo "Service déjà spécifié: $service"
+                    exit 1
+                fi
+                shift
+                ;;
+        esac
+    done
+    
+    # Vérifier les prérequis
+    if ! verify_environment; then
+        log_error "Environnement non valide"
         exit 1
-        ;;
-esac
+    fi
+    
+    # Actions spéciales
+    if [[ "$clean_logs" == "true" ]]; then
+        clean_logs
+        exit 0
+    fi
+    
+    if [[ "$rotate_logs" == "true" ]]; then
+        rotate_logs
+        exit 0
+    fi
+    
+    if [[ "$show_stats" == "true" ]]; then
+        show_log_stats
+        exit 0
+    fi
+    
+    # Sauvegarder les logs si demandé
+    if [[ -n "$save_file" ]]; then
+        save_logs "$save_file" "$lines" "$since" "$until"
+        exit 0
+    fi
+    
+    # Afficher les logs
+    if [[ -z "$service" || "$service" == "all" ]]; then
+        show_all_logs "$lines" "$follow" "$since" "$until" "$errors_only"
+    else
+        # Vérifier que le service existe
+        local services=($(get_all_services))
+        if [[ ! " ${services[@]} " =~ " ${service} " ]]; then
+            log_error "Service inconnu: $service"
+            echo "Services disponibles: ${services[*]}"
+            exit 1
+        fi
+        
+        show_logs "$service" "$lines" "$follow" "$since" "$until" "$errors_only"
+    fi
+}
 
-print_info "Logs affichés avec succès"
+# =============================================================================
+# Exécution du script
+# =============================================================================
 
-
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

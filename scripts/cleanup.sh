@@ -1,348 +1,404 @@
 #!/bin/bash
 
-# Script de Nettoyage SIO
-# Auteur: Assistant IA
+# =============================================================================
+# Script de nettoyage pour le projet SIO
+# =============================================================================
 
-set -e
+set -euo pipefail
 
-# Couleurs
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+# Source des utilitaires
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/utils/docker-utils.sh"
 
-print_info() {
-    echo -e "${GREEN}✅ $1${NC}"
-}
+# Configuration
+readonly CLEANUP_LOG_FILE="logs/cleanup.log"
 
-print_warning() {
-    echo -e "${YELLOW}⚠️  $1${NC}"
-}
+# =============================================================================
+# Fonctions de nettoyage
+# =============================================================================
 
-print_error() {
-    echo -e "${RED}❌ $1${NC}"
-}
-
-print_header() {
-    echo -e "${BLUE}📋 $1${NC}"
-    echo "============================================="
-}
-
-print_step() {
-    echo -e "${CYAN}🔧 $1${NC}"
-}
-
-# Fonction d'aide
 show_help() {
-    echo "Usage: $0 [options]"
-    echo ""
+    echo "Usage: $0 [OPTION]"
+    echo
     echo "Options:"
-    echo "  --containers, -c      - Supprimer les conteneurs arrêtés"
-    echo "  --images, -i          - Supprimer les images non utilisées"
-    echo "  --volumes, -v         - Supprimer les volumes non utilisés"
-    echo "  --networks, -n        - Supprimer les réseaux non utilisés"
-    echo "  --all, -a             - Nettoyage complet (tout supprimer)"
-    echo "  --force, -f           - Forcer sans confirmation"
-    echo "  --help, -h            - Afficher cette aide"
-    echo ""
+    echo "  -c, --containers     Nettoyer les conteneurs arrêtés"
+    echo "  -i, --images         Nettoyer les images non utilisées"
+    echo "  -v, --volumes        Nettoyer les volumes non utilisés"
+    echo "  -n, --networks       Nettoyer les réseaux non utilisés"
+    echo "  -l, --logs           Nettoyer les anciens logs"
+    echo "  -b, --backups        Nettoyer les anciennes sauvegardes"
+    echo  "  -a, --all           Nettoyage complet (défaut)"
+    echo "  -f, --force          Nettoyage forcé (sans confirmation)"
+    echo "  -h, --help           Afficher cette aide"
+    echo
     echo "Exemples:"
-    echo "  $0                    # Nettoyage sécurisé"
-    echo "  $0 --all              # Nettoyage complet"
-    echo "  $0 --containers --images  # Conteneurs et images"
-    echo "  $0 --all --force      # Nettoyage complet sans confirmation"
+    echo "  $0                   # Nettoyage complet"
+    echo "  $0 -c                # Nettoyer les conteneurs"
+    echo "  $0 -i -v             # Nettoyer images et volumes"
+    echo "  $0 -f                # Nettoyage forcé"
 }
 
-# Variables
-CLEAN_CONTAINERS=false
-CLEAN_IMAGES=false
-CLEAN_VOLUMES=false
-CLEAN_NETWORKS=false
-FORCE=false
-
-# Traitement des arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --help|-h)
-            show_help
-            exit 0
-            ;;
-        --containers|-c)
-            CLEAN_CONTAINERS=true
-            shift
-            ;;
-        --images|-i)
-            CLEAN_IMAGES=true
-            shift
-            ;;
-        --volumes|-v)
-            CLEAN_VOLUMES=true
-            shift
-            ;;
-        --networks|-n)
-            CLEAN_NETWORKS=true
-            shift
-            ;;
-        --all|-a)
-            CLEAN_CONTAINERS=true
-            CLEAN_IMAGES=true
-            CLEAN_VOLUMES=true
-            CLEAN_NETWORKS=true
-            shift
-            ;;
-        --force|-f)
-            FORCE=true
-            shift
-            ;;
-        *)
-            print_error "Option inconnue: $1"
-            show_help
-            exit 1
-            ;;
-    esac
-done
-
-# Vérifications
-if ! command -v docker &> /dev/null; then
-    print_error "Docker n'est pas installé"
-    exit 1
-fi
-
-# Vérifier si des services SIO sont en cours d'exécution
-check_sio_services() {
-    local running_services=$(docker ps --filter "name=sio" --format "{{.Names}}" 2>/dev/null || echo "")
-    if [ -n "$running_services" ]; then
-        print_warning "Des services SIO sont en cours d'exécution:"
-        echo "$running_services" | while read -r service; do
-            if [ -n "$service" ]; then
-                echo "  • $service"
-            fi
-        done
-        
-        if [ "$FORCE" = false ]; then
-            echo ""
-            read -p "Voulez-vous continuer ? (y/N): " -n 1 -r
-            echo
-            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                print_info "Nettoyage annulé"
-                exit 0
-            fi
-        fi
+cleanup_containers() {
+    log_info "Nettoyage des conteneurs..."
+    
+    # Compter les conteneurs avant nettoyage
+    local containers_before=$(docker ps -a --format "{{.Names}}" | wc -l)
+    
+    if cleanup_containers; then
+        local containers_after=$(docker ps -a --format "{{.Names}}" | wc -l)
+        local removed=$((containers_before - containers_after))
+        log_success "$removed conteneur(s) supprimé(s)"
+        return 0
+    else
+        log_error "Échec du nettoyage des conteneurs"
+        return 1
     fi
 }
 
-# Nettoyer les conteneurs
-clean_containers() {
-    if [ "$CLEAN_CONTAINERS" = true ]; then
-        print_header "Nettoyage des Conteneurs"
-        
-        local stopped_containers=$(docker ps -a --filter "status=exited" --filter "status=created" -q 2>/dev/null || echo "")
-        
-        if [ -n "$stopped_containers" ]; then
-            print_step "Suppression des conteneurs arrêtés"
-            echo "$stopped_containers" | xargs docker rm -f 2>/dev/null || true
-            print_info "Conteneurs arrêtés supprimés"
-        else
-            print_info "Aucun conteneur arrêté à supprimer"
-        fi
+cleanup_images() {
+    log_info "Nettoyage des images..."
+    
+    # Compter les images avant nettoyage
+    local images_before=$(docker images --format "{{.Repository}}" | wc -l)
+    
+    if cleanup_images; then
+        local images_after=$(docker images --format "{{.Repository}}" | wc -l)
+        local removed=$((images_before - images_after))
+        log_success "$removed image(s) supprimée(s)"
+        return 0
+    else
+        log_error "Échec du nettoyage des images"
+        return 1
     fi
 }
 
-# Nettoyer les images
-clean_images() {
-    if [ "$CLEAN_IMAGES" = true ]; then
-        print_header "Nettoyage des Images"
-        
-        local dangling_images=$(docker images -f "dangling=true" -q 2>/dev/null || echo "")
-        
-        if [ -n "$dangling_images" ]; then
-            print_step "Suppression des images non utilisées"
-            echo "$dangling_images" | xargs docker rmi -f 2>/dev/null || true
-            print_info "Images non utilisées supprimées"
-        else
-            print_info "Aucune image non utilisée à supprimer"
-        fi
-        
-        # Supprimer les images SIO si elles ne sont pas utilisées
-        local sio_images=$(docker images --filter "reference=sio*" --format "{{.Repository}}:{{.Tag}}" 2>/dev/null || echo "")
-        
-        if [ -n "$sio_images" ]; then
-            print_step "Suppression des images SIO non utilisées"
-            echo "$sio_images" | while read -r image; do
-                if [ -n "$image" ]; then
-                    docker rmi "$image" 2>/dev/null || print_warning "Impossible de supprimer $image"
-                fi
-            done
-            print_info "Images SIO non utilisées supprimées"
-        fi
+cleanup_volumes() {
+    log_info "Nettoyage des volumes..."
+    
+    # Compter les volumes avant nettoyage
+    local volumes_before=$(docker volume ls --format "{{.Name}}" | wc -l)
+    
+    if cleanup_volumes; then
+        local volumes_after=$(docker volume ls --format "{{.Name}}" | wc -l)
+        local removed=$((volumes_before - volumes_after))
+        log_success "$removed volume(s) supprimé(s)"
+        return 0
+    else
+        log_error "Échec du nettoyage des volumes"
+        return 1
     fi
 }
 
-# Nettoyer les volumes
-clean_volumes() {
-    if [ "$CLEAN_VOLUMES" = true ]; then
-        print_header "Nettoyage des Volumes"
-        
-        # Vérifier si des volumes SIO sont utilisés
-        local sio_volumes=("sio_mongodb_data" "sio_backend_data" "sio_python_logs" "sio_python_cache")
-        
-        for volume in "${sio_volumes[@]}"; do
-            if docker volume ls | grep -q "$volume"; then
-                if [ "$FORCE" = false ]; then
-                    echo ""
-                    read -p "Supprimer le volume $volume ? (y/N): " -n 1 -r
-                    echo
-                    if [[ $REPLY =~ ^[Yy]$ ]]; then
-                        docker volume rm "$volume" 2>/dev/null || print_warning "Impossible de supprimer $volume"
-                        print_info "Volume $volume supprimé"
-                    else
-                        print_info "Volume $volume conservé"
-                    fi
-                else
-                    docker volume rm "$volume" 2>/dev/null || print_warning "Impossible de supprimer $volume"
-                    print_info "Volume $volume supprimé"
-                fi
-            fi
-        done
-        
-        # Supprimer les volumes non utilisés
-        local unused_volumes=$(docker volume ls -q -f "dangling=true" 2>/dev/null || echo "")
-        
-        if [ -n "$unused_volumes" ]; then
-            print_step "Suppression des volumes non utilisés"
-            echo "$unused_volumes" | xargs docker volume rm 2>/dev/null || true
-            print_info "Volumes non utilisés supprimés"
-        fi
+cleanup_networks() {
+    log_info "Nettoyage des réseaux..."
+    
+    # Compter les réseaux avant nettoyage
+    local networks_before=$(docker network ls --format "{{.Name}}" | wc -l)
+    
+    if cleanup_networks; then
+        local networks_after=$(docker network ls --format "{{.Name}}" | wc -l)
+        local removed=$((networks_before - networks_after))
+        log_success "$removed réseau(x) supprimé(s)"
+        return 0
+    else
+        log_error "Échec du nettoyage des réseaux"
+        return 1
     fi
 }
 
-# Nettoyer les réseaux
-clean_networks() {
-    if [ "$CLEAN_NETWORKS" = true ]; then
-        print_header "Nettoyage des Réseaux"
-        
-        local unused_networks=$(docker network ls --filter "type=custom" -q 2>/dev/null || echo "")
-        
-        if [ -n "$unused_networks" ]; then
-            print_step "Suppression des réseaux non utilisés"
-            echo "$unused_networks" | xargs docker network rm 2>/dev/null || true
-            print_info "Réseaux non utilisés supprimés"
-        else
-            print_info "Aucun réseau non utilisé à supprimer"
-        fi
-    fi
-}
-
-# Nettoyer les logs
-clean_logs() {
-    print_header "Nettoyage des Logs"
+cleanup_logs() {
+    log_info "Nettoyage des logs..."
     
     # Nettoyer les logs Docker
-    if [ -d "/var/lib/docker/containers" ]; then
-        print_step "Nettoyage des logs Docker"
-        sudo find /var/lib/docker/containers/ -name "*-json.log" -exec truncate -s 0 {} \; 2>/dev/null || true
-        print_info "Logs Docker nettoyés"
+    docker system prune -f --volumes
+    
+    # Nettoyer les fichiers de logs locaux
+    if [[ -d "logs" ]]; then
+        local logs_removed=0
+        
+        # Supprimer les logs de plus de 7 jours
+        while IFS= read -r -d '' file; do
+            rm -f "$file"
+            ((logs_removed++))
+        done < <(find logs -name "*.log" -mtime +7 -print0)
+        
+        # Supprimer les rapports de plus de 30 jours
+        while IFS= read -r -d '' file; do
+            rm -f "$file"
+            ((logs_removed++))
+        done < <(find logs -name "*report*" -mtime +30 -print0)
+        
+        log_success "$logs_removed fichier(s) de log supprimé(s)"
+    else
+        log_info "Répertoire de logs non trouvé"
     fi
     
-    # Nettoyer les logs de l'application
-    if [ -d "logs" ]; then
-        print_step "Nettoyage des logs de l'application"
-        find logs/ -name "*.log" -size +100M -exec truncate -s 0 {} \; 2>/dev/null || true
-        print_info "Logs de l'application nettoyés"
-    fi
+    return 0
 }
 
-# Nettoyer le cache
-clean_cache() {
-    print_header "Nettoyage du Cache"
+cleanup_backups() {
+    log_info "Nettoyage des sauvegardes..."
+    
+    if [[ -d "backups" ]]; then
+        local backups_removed=0
+        
+        # Supprimer les sauvegardes de plus de 30 jours
+        while IFS= read -r -d '' file; do
+            rm -f "$file"
+            ((backups_removed++))
+        done < <(find backups -name "*.tar.gz" -mtime +30 -print0)
+        
+        # Supprimer les répertoires de sauvegarde de plus de 30 jours
+        while IFS= read -r -d '' dir; do
+            rm -rf "$dir"
+            ((backups_removed++))
+        done < <(find backups -type d -name "*backup*" -mtime +30 -print0)
+        
+        log_success "$backups_removed sauvegarde(s) supprimée(s)"
+    else
+        log_info "Répertoire de sauvegardes non trouvé"
+    fi
+    
+    return 0
+}
+
+cleanup_build_cache() {
+    log_info "Nettoyage du cache de construction..."
     
     # Nettoyer le cache Docker
-    print_step "Nettoyage du cache Docker"
-    docker system prune -f 2>/dev/null || true
-    print_info "Cache Docker nettoyé"
+    docker builder prune -f
     
-    # Nettoyer le cache de l'application
-    if [ -d "cache" ]; then
-        print_step "Nettoyage du cache de l'application"
-        rm -rf cache/* 2>/dev/null || true
-        print_info "Cache de l'application nettoyé"
+    # Nettoyer le cache local
+    if [[ -d ".docker-cache" ]]; then
+        rm -rf .docker-cache
+        log_success "Cache de construction supprimé"
     fi
+    
+    # Nettoyer les fichiers temporaires
+    if [[ -d "tmp" ]]; then
+        rm -rf tmp/*
+        log_success "Fichiers temporaires supprimés"
+    fi
+    
+    return 0
 }
 
-# Afficher les statistiques
-show_statistics() {
-    print_header "Statistiques après Nettoyage"
+cleanup_all() {
+    log_info "Nettoyage complet du système..."
     
-    echo -e "${CYAN}📊 Espace libéré :${NC}"
+    local total_cleaned=0
+    
+    # Nettoyer tous les composants
+    if cleanup_containers; then
+        ((total_cleaned++))
+    fi
+    
+    if cleanup_images; then
+        ((total_cleaned++))
+    fi
+    
+    if cleanup_volumes; then
+        ((total_cleaned++))
+    fi
+    
+    if cleanup_networks; then
+        ((total_cleaned++))
+    fi
+    
+    if cleanup_logs; then
+        ((total_cleaned++))
+    fi
+    
+    if cleanup_backups; then
+        ((total_cleaned++))
+    fi
+    
+    if cleanup_build_cache; then
+        ((total_cleaned++))
+    fi
+    
+    log_success "Nettoyage complet terminé ($total_cleaned composant(s) nettoyé(s))"
+    return 0
+}
+
+show_cleanup_summary() {
+    echo
+    echo "=========================================="
+    echo "  Résumé du nettoyage"
+    echo "=========================================="
+    echo
+    
+    # Afficher l'espace libéré
+    echo "Espace disque:"
+    echo "  Avant: $(df . | awk 'NR==2 {print $3}' | numfmt --to=iec)"
+    echo "  Après:  $(df . | awk 'NR==2 {print $3}' | numfmt --to=iec)"
+    echo
+    
+    # Afficher les ressources Docker
+    echo "Ressources Docker:"
+    echo "  Conteneurs: $(docker ps -a --format "{{.Names}}" | wc -l)"
+    echo "  Images: $(docker images --format "{{.Repository}}" | wc -l)"
+    echo "  Volumes: $(docker volume ls --format "{{.Name}}" | wc -l)"
+    echo "  Réseaux: $(docker network ls --format "{{.Name}}" | wc -l)"
+    echo
+    
+    # Afficher l'espace Docker
+    echo "Espace Docker:"
     docker system df --format "table {{.Type}}\t{{.TotalCount}}\t{{.Size}}\t{{.Reclaimable}}"
-    
-    echo ""
-    echo -e "${CYAN}📁 Conteneurs :${NC}"
-    echo "   Actifs: $(docker ps -q | wc -l)"
-    echo "   Arrêtés: $(docker ps -a --filter "status=exited" -q | wc -l)"
-    
-    echo ""
-    echo -e "${CYAN}🖼️  Images :${NC}"
-    echo "   Total: $(docker images -q | wc -l)"
-    echo "   Non utilisées: $(docker images -f "dangling=true" -q | wc -l)"
-    
-    echo ""
-    echo -e "${CYAN}💾 Volumes :${NC}"
-    echo "   Total: $(docker volume ls -q | wc -l)"
-    echo "   Non utilisés: $(docker volume ls -q -f "dangling=true" | wc -l)"
-    
-    echo ""
-    echo -e "${CYAN}🌐 Réseaux :${NC}"
-    echo "   Total: $(docker network ls -q | wc -l)"
-    echo "   Non utilisés: $(docker network ls --filter "type=custom" -q | wc -l)"
+    echo
 }
 
+# =============================================================================
 # Fonction principale
+# =============================================================================
+
 main() {
-    echo -e "${BLUE}🧹 Nettoyage SIO${NC}"
-    echo "============================================="
-    echo ""
+    # Variables par défaut
+    local cleanup_containers_flag=false
+    local cleanup_images_flag=false
+    local cleanup_volumes_flag=false
+    local cleanup_networks_flag=false
+    local cleanup_logs_flag=false
+    local cleanup_backups_flag=false
+    local cleanup_all_flag=true
+    local force_mode=false
     
-    # Vérifier si des services SIO sont en cours d'exécution
-    check_sio_services
+    # Parser les arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -c|--containers)
+                cleanup_containers_flag=true
+                cleanup_all_flag=false
+                shift
+                ;;
+            -i|--images)
+                cleanup_images_flag=true
+                cleanup_all_flag=false
+                shift
+                ;;
+            -v|--volumes)
+                cleanup_volumes_flag=true
+                cleanup_all_flag=false
+                shift
+                ;;
+            -n|--networks)
+                cleanup_networks_flag=true
+                cleanup_all_flag=false
+                shift
+                ;;
+            -l|--logs)
+                cleanup_logs_flag=true
+                cleanup_all_flag=false
+                shift
+                ;;
+            -b|--backups)
+                cleanup_backups_flag=true
+                cleanup_all_flag=false
+                shift
+                ;;
+            -a|--all)
+                cleanup_all_flag=true
+                shift
+                ;;
+            -f|--force)
+                force_mode=true
+                shift
+                ;;
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            -*)
+                echo "Option inconnue: $1"
+                show_help
+                exit 1
+                ;;
+            *)
+                echo "Argument inconnu: $1"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
     
-    # Confirmation pour le nettoyage complet
-    if [ "$CLEAN_VOLUMES" = true ] && [ "$FORCE" = false ]; then
-        echo -e "${YELLOW}⚠️  ATTENTION : Suppression des volumes demandée${NC}"
-        echo "   Cela supprimera définitivement les données MongoDB"
-        echo ""
-        read -p "Êtes-vous sûr de vouloir continuer ? (y/N): " -n 1 -r
+    # Créer le répertoire de logs
+    mkdir -p "$(dirname "$CLEANUP_LOG_FILE")"
+    
+    # Vérifier les prérequis
+    if ! verify_environment; then
+        log_error "Environnement non valide"
+        exit 1
+    fi
+    
+    echo "=========================================="
+    echo "  Nettoyage du système SIO"
+    echo "=========================================="
+    echo
+    
+    # Afficher ce qui va être nettoyé
+    echo "Opérations de nettoyage à effectuer:"
+    if [[ "$cleanup_all_flag" == "true" ]]; then
+        echo "  ✅ Nettoyage complet (tous les composants)"
+    else
+        [[ "$cleanup_containers_flag" == "true" ]] && echo "  ✅ Conteneurs arrêtés"
+        [[ "$cleanup_images_flag" == "true" ]] && echo "  ✅ Images non utilisées"
+        [[ "$cleanup_volumes_flag" == "true" ]] && echo "  ✅ Volumes non utilisés"
+        [[ "$cleanup_networks_flag" == "true" ]] && echo "  ✅ Réseaux non utilisés"
+        [[ "$cleanup_logs_flag" == "true" ]] && echo "  ✅ Anciens logs"
+        [[ "$cleanup_backups_flag" == "true" ]] && echo "  ✅ Anciennes sauvegardes"
+    fi
+    echo
+    
+    # Demander confirmation sauf en mode forcé
+    if [[ "$force_mode" != "true" ]]; then
+        echo "ATTENTION: Cette opération va supprimer définitivement des données!"
+        read -p "Continuer? (y/N): " -n 1 -r
         echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            print_info "Nettoyage annulé"
+            log_info "Nettoyage annulé"
             exit 0
         fi
     fi
     
     # Effectuer le nettoyage
-    clean_containers
-    clean_images
-    clean_volumes
-    clean_networks
-    clean_logs
-    clean_cache
+    local success=true
     
-    # Afficher les statistiques
-    show_statistics
+    if [[ "$cleanup_all_flag" == "true" ]]; then
+        if ! cleanup_all; then
+            success=false
+        fi
+    else
+        [[ "$cleanup_containers_flag" == "true" ]] && ! cleanup_containers && success=false
+        [[ "$cleanup_images_flag" == "true" ]] && ! cleanup_images && success=false
+        [[ "$cleanup_volumes_flag" == "true" ]] && ! cleanup_volumes && success=false
+        [[ "$cleanup_networks_flag" == "true" ]] && ! cleanup_networks && success=false
+        [[ "$cleanup_logs_flag" == "true" ]] && ! cleanup_logs && success=false
+        [[ "$cleanup_backups_flag" == "true" ]] && ! cleanup_backups && success=false
+    fi
     
-    # Affichage final
-    print_header "Nettoyage Terminé"
+    # Afficher le résumé
+    show_cleanup_summary
     
-    echo -e "${GREEN}🎉 Nettoyage effectué avec succès !${NC}"
-    echo ""
-    echo -e "${PURPLE}🔧 Commandes utiles :${NC}"
-    echo "   ./scripts/start.sh    # Redémarrer les services"
-    echo "   ./scripts/status.sh   # Vérifier l'état"
-    echo "   docker system df      # Voir l'utilisation de l'espace"
+    if [[ "$success" == "true" ]]; then
+        echo "=========================================="
+        echo "  Nettoyage terminé avec succès!"
+        echo "=========================================="
+        echo
+        echo "Commandes utiles:"
+        echo "  Vérifier:   ./scripts/health-check.sh"
+        echo "  Redémarrer: ./scripts/restart.sh"
+        echo "  Logs:       ./scripts/logs.sh"
+        echo
+    else
+        log_error "Nettoyage partiellement échoué"
+        exit 1
+    fi
 }
 
+# =============================================================================
 # Exécution du script
-main "$@"
+# =============================================================================
 
-
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

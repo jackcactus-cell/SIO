@@ -1,321 +1,445 @@
 #!/bin/bash
 
-# Script de Sauvegarde SIO
-# Auteur: Assistant IA
+# =============================================================================
+# Script de sauvegarde pour le projet SIO
+# =============================================================================
 
-set -e
+set -euo pipefail
 
-# Couleurs
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+# Source des utilitaires
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/utils/docker-utils.sh"
+source "$SCRIPT_DIR/utils/backup-utils.sh"
 
-print_info() {
-    echo -e "${GREEN}✅ $1${NC}"
-}
+# Configuration
+readonly BACKUP_LOG_FILE="logs/backup.log"
 
-print_warning() {
-    echo -e "${YELLOW}⚠️  $1${NC}"
-}
+# =============================================================================
+# Fonctions de sauvegarde
+# =============================================================================
 
-print_error() {
-    echo -e "${RED}❌ $1${NC}"
-}
-
-print_header() {
-    echo -e "${BLUE}📋 $1${NC}"
-    echo "============================================="
-}
-
-print_step() {
-    echo -e "${CYAN}🔧 $1${NC}"
-}
-
-# Fonction d'aide
 show_help() {
-    echo "Usage: $0 [options]"
-    echo ""
+    echo "Usage: $0 [OPTION]"
+    echo
     echo "Options:"
-    echo "  --full, -f            - Sauvegarde complète (MongoDB + volumes)"
-    echo "  --mongodb, -m         - Sauvegarde MongoDB uniquement"
-    echo "  --volumes, -v         - Sauvegarde des volumes uniquement"
-    echo "  --compress, -c        - Compresser la sauvegarde"
-    echo "  --help, -h            - Afficher cette aide"
-    echo ""
+    echo "  -f, --full           Sauvegarde complète (défaut)"
+    echo "  -d, --data           Sauvegarde des données seulement"
+    echo "  -c, --config         Sauvegarde de la configuration seulement"
+    echo "  -l, --logs           Sauvegarde des logs seulement"
+    echo "  -v, --volumes        Sauvegarde des volumes Docker"
+    echo "  -a, --auto           Sauvegarde automatique (cron)"
+    echo "  -r, --restore FILE   Restaurer depuis un fichier de sauvegarde"
+    echo "  -l, --list           Lister les sauvegardes disponibles"
+    echo "  -c, --clean          Nettoyer les anciennes sauvegardes"
+    echo "  -h, --help           Afficher cette aide"
+    echo
     echo "Exemples:"
-    echo "  $0                    # Sauvegarde automatique"
-    echo "  $0 --full             # Sauvegarde complète"
-    echo "  $0 --mongodb --compress  # MongoDB compressé"
+    echo "  $0                   # Sauvegarde complète"
+    echo "  $0 -d                # Sauvegarde des données"
+    echo "  $0 -r backup.tar.gz  # Restaurer depuis backup.tar.gz"
+    echo "  $0 -l                # Lister les sauvegardes"
+    echo "  $0 -c                # Nettoyer les anciennes sauvegardes"
 }
 
-# Variables
-BACKUP_TYPE="auto"
-COMPRESS=false
+perform_full_backup() {
+    log_info "Démarrage de la sauvegarde complète..."
+    
+    local backup_dir="backups/full_$(date +%Y%m%d_%H%M%S)"
+    
+    if create_full_backup "$backup_dir"; then
+        log_success "Sauvegarde complète créée: $backup_dir"
+        return 0
+    else
+        log_error "Échec de la sauvegarde complète"
+        return 1
+    fi
+}
 
-# Traitement des arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --help|-h)
-            show_help
-            exit 0
+perform_data_backup() {
+    log_info "Démarrage de la sauvegarde des données..."
+    
+    local backup_dir="backups/data_$(date +%Y%m%d_%H%M%S)"
+    
+    if backup_mongodb_data "$backup_dir"; then
+        log_success "Sauvegarde des données créée: $backup_dir"
+        return 0
+    else
+        log_error "Échec de la sauvegarde des données"
+        return 1
+    fi
+}
+
+perform_config_backup() {
+    log_info "Démarrage de la sauvegarde de la configuration..."
+    
+    local backup_dir="backups/config_$(date +%Y%m%d_%H%M%S)"
+    
+    if backup_config_files "$backup_dir"; then
+        log_success "Sauvegarde de la configuration créée: $backup_dir"
+        return 0
+    else
+        log_error "Échec de la sauvegarde de la configuration"
+        return 1
+    fi
+}
+
+perform_logs_backup() {
+    log_info "Démarrage de la sauvegarde des logs..."
+    
+    local backup_dir="backups/logs_$(date +%Y%m%d_%H%M%S)"
+    
+    if backup_logs "$backup_dir"; then
+        log_success "Sauvegarde des logs créée: $backup_dir"
+        return 0
+    else
+        log_error "Échec de la sauvegarde des logs"
+        return 1
+    fi
+}
+
+perform_volumes_backup() {
+    log_info "Démarrage de la sauvegarde des volumes..."
+    
+    local backup_dir="backups/volumes_$(date +%Y%m%d_%H%M%S)"
+    
+    if backup_docker_volumes "$backup_dir"; then
+        log_success "Sauvegarde des volumes créée: $backup_dir"
+        return 0
+    else
+        log_error "Échec de la sauvegarde des volumes"
+        return 1
+    fi
+}
+
+restore_backup() {
+    local backup_file="$1"
+    
+    log_info "Restauration depuis: $backup_file"
+    
+    if [[ ! -f "$backup_file" ]]; then
+        log_error "Fichier de sauvegarde non trouvé: $backup_file"
+        return 1
+    fi
+    
+    # Détecter le type de sauvegarde
+    local backup_type=""
+    if [[ "$backup_file" == *"mongodb_"* ]]; then
+        backup_type="mongodb"
+    elif [[ "$backup_file" == *"config_"* ]]; then
+        backup_type="config"
+    elif [[ "$backup_file" == *"volumes_"* ]]; then
+        backup_type="volumes"
+    elif [[ "$backup_file" == *"full_"* ]]; then
+        backup_type="full"
+    else
+        backup_type="unknown"
+    fi
+    
+    echo "Type de sauvegarde détecté: $backup_type"
+    echo "ATTENTION: Cette opération va écraser les données existantes!"
+    read -p "Continuer? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        log_info "Restauration annulée"
+        return 0
+    fi
+    
+    # Restaurer selon le type
+    case "$backup_type" in
+        "mongodb")
+            if restore_mongodb_data "$backup_file"; then
+                log_success "Restauration MongoDB terminée"
+                return 0
+            else
+                log_error "Échec de la restauration MongoDB"
+                return 1
+            fi
             ;;
-        --full|-f)
-            BACKUP_TYPE="full"
-            shift
+        "config")
+            if restore_config_files "$backup_file"; then
+                log_success "Restauration de la configuration terminée"
+                return 0
+            else
+                log_error "Échec de la restauration de la configuration"
+                return 1
+            fi
             ;;
-        --mongodb|-m)
-            BACKUP_TYPE="mongodb"
-            shift
+        "volumes")
+            if restore_docker_volumes "$backup_file"; then
+                log_success "Restauration des volumes terminée"
+                return 0
+            else
+                log_error "Échec de la restauration des volumes"
+                return 1
+            fi
             ;;
-        --volumes|-v)
-            BACKUP_TYPE="volumes"
-            shift
-            ;;
-        --compress|-c)
-            COMPRESS=true
-            shift
+        "full")
+            log_info "Restauration complète..."
+            # Pour une sauvegarde complète, restaurer chaque composant
+            # Cette fonctionnalité nécessiterait une implémentation plus complexe
+            log_warning "Restauration complète non implémentée"
+            return 1
             ;;
         *)
-            print_error "Option inconnue: $1"
-            show_help
+            log_error "Type de sauvegarde non reconnu"
+            return 1
+            ;;
+    esac
+}
+
+list_backups() {
+    log_info "Liste des sauvegardes disponibles..."
+    
+    if list_backups; then
+        log_success "Liste des sauvegardes affichée"
+        return 0
+    else
+        log_error "Échec de l'affichage des sauvegardes"
+        return 1
+    fi
+}
+
+cleanup_old_backups() {
+    log_info "Nettoyage des anciennes sauvegardes..."
+    
+    local retention_days="${1:-30}"
+    
+    if cleanup_old_backups "backups" "$retention_days"; then
+        log_success "Nettoyage des sauvegardes terminé"
+        return 0
+    else
+        log_error "Échec du nettoyage des sauvegardes"
+        return 1
+    fi
+}
+
+setup_auto_backup() {
+    log_info "Configuration de la sauvegarde automatique..."
+    
+    # Créer le script de sauvegarde automatique
+    local auto_backup_script="/usr/local/bin/sio-auto-backup.sh"
+    
+    cat > "$auto_backup_script" << 'EOF'
+#!/bin/bash
+
+# Script de sauvegarde automatique SIO
+cd /path/to/sio/project
+./scripts/backup.sh -f >> logs/auto_backup.log 2>&1
+EOF
+    
+    chmod +x "$auto_backup_script"
+    
+    # Ajouter au crontab
+    local cron_job="0 2 * * * $auto_backup_script"
+    
+    if crontab -l 2>/dev/null | grep -q "$auto_backup_script"; then
+        log_info "Tâche cron déjà configurée"
+    else
+        (crontab -l 2>/dev/null; echo "$cron_job") | crontab -
+        log_success "Tâche cron ajoutée: sauvegarde quotidienne à 2h00"
+    fi
+    
+    log_success "Sauvegarde automatique configurée"
+}
+
+verify_backup_integrity() {
+    local backup_file="$1"
+    
+    log_info "Vérification de l'intégrité de la sauvegarde: $backup_file"
+    
+    if verify_backup_integrity "$backup_file"; then
+        log_success "Sauvegarde valide: $backup_file"
+        return 0
+    else
+        log_error "Sauvegarde corrompue: $backup_file"
+        return 1
+    fi
+}
+
+# =============================================================================
+# Fonction principale
+# =============================================================================
+
+main() {
+    # Variables par défaut
+    local backup_type="full"
+    local restore_file=""
+    local list_mode=false
+    local cleanup_mode=false
+    local auto_backup=false
+    local verify_file=""
+    
+    # Parser les arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -f|--full)
+                backup_type="full"
+                shift
+                ;;
+            -d|--data)
+                backup_type="data"
+                shift
+                ;;
+            -c|--config)
+                backup_type="config"
+                shift
+                ;;
+            -l|--logs)
+                backup_type="logs"
+                shift
+                ;;
+            -v|--volumes)
+                backup_type="volumes"
+                shift
+                ;;
+            -r|--restore)
+                restore_file="$2"
+                shift 2
+                ;;
+            -l|--list)
+                list_mode=true
+                shift
+                ;;
+            -c|--clean)
+                cleanup_mode=true
+                shift
+                ;;
+            -a|--auto)
+                auto_backup=true
+                shift
+                ;;
+            --verify)
+                verify_file="$2"
+                shift 2
+                ;;
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            -*)
+                echo "Option inconnue: $1"
+                show_help
+                exit 1
+                ;;
+            *)
+                echo "Argument inconnu: $1"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
+    
+    # Créer le répertoire de logs
+    mkdir -p "$(dirname "$BACKUP_LOG_FILE")"
+    
+    # Vérifier les prérequis
+    if ! verify_environment; then
+        log_error "Environnement non valide"
+        exit 1
+    fi
+    
+    # Actions spéciales
+    if [[ "$list_mode" == "true" ]]; then
+        list_backups
+        exit 0
+    fi
+    
+    if [[ "$cleanup_mode" == "true" ]]; then
+        cleanup_old_backups
+        exit 0
+    fi
+    
+    if [[ "$auto_backup" == "true" ]]; then
+        setup_auto_backup
+        exit 0
+    fi
+    
+    if [[ -n "$verify_file" ]]; then
+        verify_backup_integrity "$verify_file"
+        exit 0
+    fi
+    
+    # Restauration
+    if [[ -n "$restore_file" ]]; then
+        if restore_backup "$restore_file"; then
+            echo
+            echo "=========================================="
+            echo "  Restauration terminée avec succès!"
+            echo "=========================================="
+            echo
+            echo "Prochaines étapes:"
+            echo "1. Redémarrer les services: ./scripts/restart.sh"
+            echo "2. Vérifier la santé: ./scripts/health-check.sh"
+            echo
+        else
+            log_error "Échec de la restauration"
+            exit 1
+        fi
+        exit 0
+    fi
+    
+    # Sauvegarde
+    echo "=========================================="
+    echo "  Sauvegarde SIO"
+    echo "=========================================="
+    echo
+    
+    local success=false
+    
+    case "$backup_type" in
+        "full")
+            if perform_full_backup; then
+                success=true
+            fi
+            ;;
+        "data")
+            if perform_data_backup; then
+                success=true
+            fi
+            ;;
+        "config")
+            if perform_config_backup; then
+                success=true
+            fi
+            ;;
+        "logs")
+            if perform_logs_backup; then
+                success=true
+            fi
+            ;;
+        "volumes")
+            if perform_volumes_backup; then
+                success=true
+            fi
+            ;;
+        *)
+            log_error "Type de sauvegarde inconnu: $backup_type"
             exit 1
             ;;
     esac
-done
-
-# Vérifications
-if ! command -v docker &> /dev/null; then
-    print_error "Docker n'est pas installé"
-    exit 1
-fi
-
-if ! command -v docker-compose &> /dev/null; then
-    print_error "Docker Compose n'est pas installé"
-    exit 1
-fi
-
-# Créer le dossier de sauvegarde
-create_backup_dir() {
-    local timestamp=$(date +%Y%m%d_%H%M%S)
-    local backup_dir="backups/sio_backup_$timestamp"
     
-    mkdir -p "$backup_dir"
-    echo "$backup_dir"
-}
-
-# Sauvegarder MongoDB
-backup_mongodb() {
-    local backup_dir="$1"
-    
-    print_step "Sauvegarde de MongoDB"
-    
-    if docker ps | grep -q "sio_mongodb_prod"; then
-        # Créer le dossier de sauvegarde MongoDB
-        mkdir -p "$backup_dir/mongodb"
-        
-        # Sauvegarder MongoDB
-        if docker exec sio_mongodb_prod mongodump --out /tmp/mongodb_backup 2>/dev/null; then
-            docker cp sio_mongodb_prod:/tmp/mongodb_backup "$backup_dir/mongodb/"
-            print_info "MongoDB sauvegardé avec succès"
-        else
-            print_warning "Échec de la sauvegarde MongoDB"
-        fi
+    if [[ "$success" == "true" ]]; then
+        echo
+        echo "=========================================="
+        echo "  Sauvegarde terminée avec succès!"
+        echo "=========================================="
+        echo
+        echo "Commandes utiles:"
+        echo "  Lister:     $0 -l"
+        echo "  Restaurer:  $0 -r FILE"
+        echo "  Nettoyer:   $0 -c"
+        echo "  Auto:       $0 -a"
+        echo
     else
-        print_warning "MongoDB n'est pas en cours d'exécution"
+        log_error "Échec de la sauvegarde"
+        exit 1
     fi
 }
 
-# Sauvegarder les volumes
-backup_volumes() {
-    local backup_dir="$1"
-    
-    print_step "Sauvegarde des volumes"
-    
-    # Créer le dossier de sauvegarde des volumes
-    mkdir -p "$backup_dir/volumes"
-    
-    # Liste des volumes à sauvegarder
-    local volumes=("sio_mongodb_data" "sio_backend_data" "sio_python_logs" "sio_python_cache")
-    
-    for volume in "${volumes[@]}"; do
-        if docker volume ls | grep -q "$volume"; then
-            print_step "Sauvegarde du volume $volume"
-            
-            # Créer un conteneur temporaire pour sauvegarder le volume
-            docker run --rm -v "$volume":/data -v "$backup_dir/volumes":/backup alpine tar czf "/backup/${volume}.tar.gz" -C /data . 2>/dev/null || true
-            
-            if [ -f "$backup_dir/volumes/${volume}.tar.gz" ]; then
-                print_info "Volume $volume sauvegardé"
-            else
-                print_warning "Échec de la sauvegarde du volume $volume"
-            fi
-        else
-            print_warning "Volume $volume non trouvé"
-        fi
-    done
-}
-
-# Sauvegarder les fichiers de configuration
-backup_config() {
-    local backup_dir="$1"
-    
-    print_step "Sauvegarde des fichiers de configuration"
-    
-    # Créer le dossier de configuration
-    mkdir -p "$backup_dir/config"
-    
-    # Copier les fichiers de configuration
-    if [ -f ".env" ]; then
-        cp .env "$backup_dir/config/"
-        print_info "Fichier .env sauvegardé"
-    fi
-    
-    if [ -f "backend_python/.env" ]; then
-        cp backend_python/.env "$backup_dir/config/"
-        print_info "Fichier backend_python/.env sauvegardé"
-    fi
-    
-    if [ -f "config/docker/docker-compose.yml" ]; then
-        cp config/docker/docker-compose.yml "$backup_dir/config/"
-        print_info "Fichier docker-compose.yml sauvegardé"
-    fi
-}
-
-# Créer un fichier de métadonnées
-create_metadata() {
-    local backup_dir="$1"
-    
-    print_step "Création des métadonnées"
-    
-    cat > "$backup_dir/metadata.json" << EOF
-{
-    "backup_date": "$(date -Iseconds)",
-    "backup_type": "$BACKUP_TYPE",
-    "compressed": $COMPRESS,
-    "system_info": {
-        "hostname": "$(hostname)",
-        "docker_version": "$(docker --version)",
-        "docker_compose_version": "$(docker-compose --version)"
-    },
-    "services": {
-        "frontend": "$(docker ps --filter "name=sio_frontend_prod" --format "{{.Status}}" 2>/dev/null || echo "Not running")",
-        "backend_node": "$(docker ps --filter "name=sio_backend_node_prod" --format "{{.Status}}" 2>/dev/null || echo "Not running")",
-        "backend_python": "$(docker ps --filter "name=sio_backend_python_prod" --format "{{.Status}}" 2>/dev/null || echo "Not running")",
-        "backend_llm": "$(docker ps --filter "name=sio_backend_llm_prod" --format "{{.Status}}" 2>/dev/null || echo "Not running")",
-        "mongodb": "$(docker ps --filter "name=sio_mongodb_prod" --format "{{.Status}}" 2>/dev/null || echo "Not running")"
-    },
-    "volumes": [
-        $(docker volume ls --filter "name=sio" --format "{{.Name}}" 2>/dev/null | tr '\n' ',' | sed 's/,$//' | sed 's/^/"/' | sed 's/,/","/g' | sed 's/$/"/')
-    ]
-}
-EOF
-    
-    print_info "Métadonnées créées"
-}
-
-# Compresser la sauvegarde
-compress_backup() {
-    local backup_dir="$1"
-    
-    if [ "$COMPRESS" = true ]; then
-        print_step "Compression de la sauvegarde"
-        
-        local parent_dir=$(dirname "$backup_dir")
-        local backup_name=$(basename "$backup_dir")
-        
-        cd "$parent_dir"
-        tar -czf "${backup_name}.tar.gz" "$backup_name" 2>/dev/null
-        
-        if [ -f "${backup_name}.tar.gz" ]; then
-            rm -rf "$backup_name"
-            print_info "Sauvegarde compressée: ${backup_name}.tar.gz"
-            echo "$parent_dir/${backup_name}.tar.gz"
-        else
-            print_warning "Échec de la compression"
-            echo "$backup_dir"
-        fi
-    else
-        echo "$backup_dir"
-    fi
-}
-
-# Nettoyer les anciennes sauvegardes
-cleanup_old_backups() {
-    print_step "Nettoyage des anciennes sauvegardes"
-    
-    # Garder seulement les 10 dernières sauvegardes
-    local backup_count=$(find backups/ -maxdepth 1 -name "sio_backup_*" -type d | wc -l)
-    
-    if [ "$backup_count" -gt 10 ]; then
-        local to_delete=$((backup_count - 10))
-        find backups/ -maxdepth 1 -name "sio_backup_*" -type d -printf '%T@ %p\n' | sort -n | head -n "$to_delete" | cut -d' ' -f2- | xargs rm -rf
-        print_info "$to_delete anciennes sauvegardes supprimées"
-    else
-        print_info "Aucune ancienne sauvegarde à supprimer"
-    fi
-}
-
-# Fonction principale
-main() {
-    echo -e "${BLUE}💾 Sauvegarde SIO${NC}"
-    echo "============================================="
-    echo ""
-    
-    print_header "Démarrage de la Sauvegarde"
-    
-    # Créer le dossier de sauvegarde
-    local backup_dir=$(create_backup_dir)
-    print_info "Dossier de sauvegarde créé: $backup_dir"
-    
-    # Effectuer la sauvegarde selon le type
-    case $BACKUP_TYPE in
-        "auto"|"full")
-            backup_mongodb "$backup_dir"
-            backup_volumes "$backup_dir"
-            backup_config "$backup_dir"
-            ;;
-        "mongodb")
-            backup_mongodb "$backup_dir"
-            ;;
-        "volumes")
-            backup_volumes "$backup_dir"
-            ;;
-    esac
-    
-    # Créer les métadonnées
-    create_metadata "$backup_dir"
-    
-    # Compresser si demandé
-    local final_backup=$(compress_backup "$backup_dir")
-    
-    # Nettoyer les anciennes sauvegardes
-    cleanup_old_backups
-    
-    # Affichage final
-    print_header "Sauvegarde Terminée"
-    
-    echo -e "${GREEN}🎉 Sauvegarde créée avec succès !${NC}"
-    echo ""
-    echo -e "${CYAN}📁 Emplacement :${NC}"
-    echo "   $final_backup"
-    echo ""
-    echo -e "${CYAN}📊 Taille :${NC}"
-    if [ -d "$final_backup" ]; then
-        echo "   $(du -sh "$final_backup" | cut -f1)"
-    else
-        echo "   $(du -sh "$final_backup" | cut -f1)"
-    fi
-    echo ""
-    echo -e "${PURPLE}🔧 Commandes utiles :${NC}"
-    echo "   ./scripts/restore.sh $final_backup  # Restaurer la sauvegarde"
-    echo "   ls -la backups/                     # Lister les sauvegardes"
-    echo "   ./scripts/status.sh                 # Vérifier l'état"
-}
-
+# =============================================================================
 # Exécution du script
-main "$@"
+# =============================================================================
 
-
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

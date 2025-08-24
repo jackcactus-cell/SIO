@@ -317,6 +317,21 @@ app.post('/api/chatbot', async (req, res) => {
       chatbotLogger.response(question, chatbotResponse.response.data.summary, responseTime);
       backendLogger.info(`Question méta traitée en ${responseTime}ms`, 'CHATBOT');
       
+    } else if (chatbotResponse.success && chatbotResponse.response.type === 'time_analysis') {
+      
+      finalResponse = {
+        status: 'success',
+        type: 'time_analysis',
+        data: chatbotResponse.response.data,
+        conversation: chatbotResponse.response,
+        responseTime: responseTime,
+        dataSource: dataSource,
+        enrichedStatistics: intelligentChatbot.getEnrichedStatistics(auditData || [])
+      };
+      
+      chatbotLogger.response(question, chatbotResponse.response.data?.summary || chatbotResponse.response.message, responseTime);
+      backendLogger.info(`Question temporelle traitée en ${responseTime}ms`, 'CHATBOT');
+      
     } else if (chatbotResponse.success && chatbotResponse.response.type === 'complex_question') {
       
       finalResponse = {

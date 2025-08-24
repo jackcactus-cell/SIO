@@ -390,6 +390,66 @@ async def oracle_test_connection(
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
 
+@app.post("/api/oracle/init-pool")
+async def oracle_init_pool(
+    host: str = Body(...),
+    port: int = Body(...),
+    service_name: str = Body(...),
+    username: str = Body(...),
+    password: str = Body(...),
+    driver_mode: str = Body("thin"),
+    min_sessions: int = Body(1),
+    max_sessions: int = Body(5),
+    increment: int = Body(1)
+):
+    """Initialise le pool de connexions Oracle."""
+    if oracledb is None:
+        return JSONResponse(status_code=500, content={
+            "success": False,
+            "error": "Le module oracledb n'est pas installé. Faites: pip install oracledb"
+        })
+
+    try:
+        pool_config = OraclePoolConfig(
+            host=host,
+            port=port,
+            service_name=service_name,
+            username=username,
+            password=password,
+            driver_mode=driver_mode,
+            min_sessions=min_sessions,
+            max_sessions=max_sessions,
+            increment=increment,
+        )
+        
+        success = oracle_pool.init_pool(pool_config)
+        if success:
+            return {"success": True, "message": "Pool Oracle initialisé avec succès"}
+        else:
+            return JSONResponse(status_code=500, content={
+                "success": False,
+                "error": "Échec d'initialisation du pool Oracle"
+            })
+    except Exception as e:
+        logger.error(f"Oracle pool init error: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+
+@app.get("/api/oracle/pool-stats")
+async def oracle_pool_stats():
+    """Retourne les statistiques du pool de connexions Oracle."""
+    try:
+        stats = oracle_pool.stats()
+        return {
+            "is_initialized": oracle_pool.is_initialized,
+            "is_available": oracle_pool.is_available,
+            "stats": stats
+        }
+    except Exception as e:
+        logger.error(f"Oracle pool stats error: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 @app.get("/api/oracle/awr/snapshots")
 async def oracle_awr_snapshots(limit: int = 100):
     """Expose les snapshots AWR du CSV fourni pour alimenter le dashboard."""
