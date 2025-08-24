@@ -119,6 +119,90 @@ const generateClientFallback = (question: string) => {
   };
 };
 
+// Pool de suggestions variées et testées
+const suggestionPools = {
+  utilisateurs: [
+    "Combien d'utilisateurs ont effectué des actions ?",
+    "Quels sont les utilisateurs les plus actifs ?",
+    "Qui sont les utilisateurs système ?",
+    "Montrez-moi l'activité des utilisateurs",
+    "Analyse des connexions utilisateurs",
+    "Quels utilisateurs ont accédé récemment ?"
+  ],
+  actions: [
+    "Quelles sont les actions les plus fréquentes ?",
+    "Montrez-moi les opérations de sécurité",
+    "Analysez la répartition des actions",
+    "Quelles sont les actions de modification ?",
+    "Combien d'actions SELECT ont été effectuées ?",
+    "Montrez-moi les actions de suppression"
+  ],
+  objets: [
+    "Quels objets sont les plus consultés ?",
+    "Montrez-moi les tables les plus utilisées",
+    "Quels sont les objets système ?",
+    "Analyse des accès aux objets",
+    "Quelles tables ont été modifiées ?",
+    "Objets les plus critiques"
+  ],
+  temporalite: [
+    "À quelle heure y a-t-il le plus d'activité ?",
+    "Montrez-moi l'activité par heure",
+    "Quand les utilisateurs se connectent-ils ?",
+    "Analyse de l'activité nocturne",
+    "Pic d'activité de la journée",
+    "Répartition temporelle des actions"
+  ],
+  securite: [
+    "Montrez-moi les actions de sécurité",
+    "Analysez les tentatives de connexion",
+    "Quels sont les accès suspects ?",
+    "Actions administrateur récentes",
+    "Surveillance des privilèges",
+    "Audit des modifications système"
+  ],
+  performance: [
+    "Analysez les performances de la base",
+    "Quelles requêtes sont les plus lentes ?",
+    "Montrez-moi l'utilisation des ressources",
+    "Optimisation des accès",
+    "Tables les plus sollicitées",
+    "Impact des opérations"
+  ]
+};
+
+// Fonction pour générer des suggestions aléatoires
+const generateRandomSuggestions = (count: number = 3): string[] => {
+  const allCategories = Object.keys(suggestionPools);
+  const selectedSuggestions: string[] = [];
+  
+  // Sélectionner des catégories aléatoires
+  const shuffledCategories = allCategories.sort(() => Math.random() - 0.5);
+  
+  for (let i = 0; i < Math.min(count, shuffledCategories.length); i++) {
+    const category = shuffledCategories[i] as keyof typeof suggestionPools;
+    const suggestions = suggestionPools[category];
+    const randomSuggestion = suggestions[Math.floor(Math.random() * suggestions.length)];
+    
+    if (!selectedSuggestions.includes(randomSuggestion)) {
+      selectedSuggestions.push(randomSuggestion);
+    }
+  }
+  
+  // Si on n'a pas assez de suggestions, compléter avec d'autres
+  while (selectedSuggestions.length < count) {
+    const randomCategory = allCategories[Math.floor(Math.random() * allCategories.length)] as keyof typeof suggestionPools;
+    const suggestions = suggestionPools[randomCategory];
+    const randomSuggestion = suggestions[Math.floor(Math.random() * suggestions.length)];
+    
+    if (!selectedSuggestions.includes(randomSuggestion)) {
+      selectedSuggestions.push(randomSuggestion);
+    }
+  }
+  
+  return selectedSuggestions;
+};
+
 const ChatbotPage: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -127,11 +211,7 @@ const ChatbotPage: React.FC = () => {
       sender: 'bot',
       timestamp: new Date(),
       type: 'greeting',
-      suggestions: [
-        "Quels sont les utilisateurs les plus actifs ?",
-        "Montrez-moi les actions de sécurité",
-        "Analysez les performances de la base"
-      ]
+      suggestions: generateRandomSuggestions(3)
     }
   ]);
   const [inputText, setInputText] = useState('');
@@ -160,29 +240,183 @@ const ChatbotPage: React.FC = () => {
     return () => clearTimeout(timer);
   }, [messages, scrollToBottom]);
 
-  // Fonction d'envoi améliorée et robuste
-  const handleSendMessage = async () => {
-    if (!inputText.trim() || isLoading) return;
+  // Fonction pour gérer les clics sur les suggestions
+  const handleSuggestionClick = (suggestion: string) => {
+    setInputText(suggestion);
+    // Envoyer automatiquement la suggestion
+    setTimeout(() => {
+      if (suggestion.trim() && !isLoading) {
+        setInputText('');
+        handleSendMessageWithText(suggestion.trim());
+      }
+    }, 100);
+  };
 
-    logUserAction('send_message', 'ChatbotPage', { question: inputText.trim() });
-    logChatbot('question_sent', inputText.trim());
+  // Fonction d'envoi avec texte personnalisé
+  const handleSendMessageWithText = async (text?: string) => {
+    const messageText = text || inputText.trim();
+    if (!messageText || isLoading) return;
+
+    logUserAction('send_message', 'ChatbotPage', { question: messageText });
+    logChatbot('question_sent', messageText);
 
     const userMessage: Message = {
       id: Date.now().toString(),
-      text: inputText.trim(),
+      text: messageText,
       sender: 'user',
       timestamp: new Date(),
       type: 'text'
     };
 
     setMessages(prev => [...prev, userMessage]);
-    setInputText('');
+    if (!text) setInputText(''); // Ne vider que si c'est le texte de l'input
     setIsTyping(true);
     setIsLoading(true);
 
     try {
       const startTime = Date.now();
-      logger.info('Tentative d\'appel API chatbot', 'CHATBOT_API', { question: userMessage.text });
+      logger.info('Tentative d\'appel API chatbot', 'CHATBOT_API', { question: messageText });
+      
+      // Appel à l'API backend avec timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+      const response = await fetch('http://localhost:4000/api/chatbot', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ question: messageText }),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      const responseTime = Date.now() - startTime;
+      logger.info('Réponse API chatbot reçue', 'CHATBOT_API', { 
+        status: data.status, 
+        responseTime 
+      });
+      
+      let botMessage: Message;
+
+      if (data.status === 'success') {
+        // Gestion du nouveau format de réponse du chatbot intelligent
+        if (data.type === 'conversation') {
+          botMessage = {
+            id: (Date.now() + 1).toString(),
+            text: data.conversation.message,
+            sender: 'bot',
+            timestamp: new Date(),
+            type: data.conversation.type,
+            suggestions: data.conversation.suggestions || generateRandomSuggestions(3),
+            confidence: data.conversation.confidence,
+            enrichedStatistics: data.enrichedStatistics
+          };
+        } else if (data.type === 'analysis') {
+          botMessage = {
+            id: (Date.now() + 1).toString(),
+            text: data.data.summary || data.data.explanation || 'Analyse terminée',
+            sender: 'bot',
+            timestamp: new Date(),
+            type: 'analysis',
+            data: data.data.data,
+            explanation: data.data.explanation,
+            summary: data.data.summary,
+            columns: data.data.columns,
+            suggestions: generateRandomSuggestions(3),
+            enrichedStatistics: data.enrichedStatistics
+          };
+        } else {
+          // Fallback pour l'ancien format
+          botMessage = {
+            id: (Date.now() + 1).toString(),
+            text: data.data.summary || data.data.explanation || 'Réponse reçue',
+            sender: 'bot',
+            timestamp: new Date(),
+            type: data.data.type || 'text',
+            data: data.data.data,
+            explanation: data.data.explanation,
+            summary: data.data.summary,
+            columns: data.data.columns,
+            suggestions: generateRandomSuggestions(3)
+          };
+        }
+      } else {
+        // Gestion d'erreur avec fallback intelligent
+        const fallbackMessage = generateClientFallback(messageText);
+        botMessage = {
+          id: (Date.now() + 1).toString(),
+          text: fallbackMessage.text,
+          sender: 'bot',
+          timestamp: new Date(),
+          type: fallbackMessage.type,
+          data: fallbackMessage.data,
+          columns: fallbackMessage.columns,
+          suggestions: generateRandomSuggestions(3)
+        };
+      }
+
+      setMessages(prev => [...prev, botMessage]);
+      logChatbot('response_received', messageText, botMessage.text);
+    } catch (error) {
+      logger.error('Erreur lors de la communication avec le serveur', error, 'CHATBOT_API');
+      logChatbot('error', messageText, null, error);
+      
+      // Fallback vers les réponses intelligentes si l'API échoue
+      logger.warn('Utilisation du fallback intelligent', 'CHATBOT_FALLBACK', { question: messageText });
+      
+      // Essayer d'abord les réponses statiques simples
+      const staticAnswer = {
+        'bonjour': 'Bonjour ! Désolé, j\'ai un problème de connexion. Mais je peux vous aider avec l\'analyse Oracle.',
+        'salut': 'Salut ! Problème temporaire avec le serveur. Que voulez-vous savoir sur Oracle ?',
+        'aide': 'Aide disponible : Posez-moi des questions sur les utilisateurs, actions, objets ou temporalité Oracle.',
+        'merci': 'De rien ! Le système fonctionne en mode dégradé mais je peux analyser vos données.'
+      }[messageText.toLowerCase().trim()];
+
+      let botMessage: Message;
+      
+      if (staticAnswer) {
+        botMessage = {
+          id: (Date.now() + 1).toString(),
+          text: staticAnswer,
+          sender: 'bot',
+          timestamp: new Date(),
+          type: 'text',
+          suggestions: generateRandomSuggestions(3)
+        };
+      } else {
+        // Utiliser le fallback intelligent avec données
+        const fallbackResponse = generateClientFallback(messageText);
+        botMessage = {
+          id: (Date.now() + 1).toString(),
+          text: `⚠️ Mode hors-ligne activé. ${fallbackResponse.text}`,
+          sender: 'bot',
+          timestamp: new Date(),
+          type: fallbackResponse.type,
+          data: fallbackResponse.data,
+          columns: fallbackResponse.columns,
+          suggestions: generateRandomSuggestions(3)
+        };
+      }
+
+      setMessages(prev => [...prev, botMessage]);
+      logChatbot('fallback_used', messageText, botMessage.text);
+    } finally {
+      setIsTyping(false);
+      setIsLoading(false);
+    }
+  };
+
+  // Fonction d'envoi améliorée et robuste
+  const handleSendMessage = async () => {
+    await handleSendMessageWithText();
       
       // Appel à l'API backend avec timeout
       const controller = new AbortController();
@@ -222,7 +456,7 @@ const ChatbotPage: React.FC = () => {
             sender: 'bot',
             timestamp: new Date(),
             type: data.conversation.type,
-            suggestions: data.conversation.suggestions,
+            suggestions: data.conversation.suggestions || generateRandomSuggestions(3),
             confidence: data.conversation.confidence,
             enrichedStatistics: data.enrichedStatistics
           };
@@ -237,6 +471,7 @@ const ChatbotPage: React.FC = () => {
             explanation: data.data.explanation,
             summary: data.data.summary,
             columns: data.data.columns,
+            suggestions: generateRandomSuggestions(3),
             enrichedStatistics: data.enrichedStatistics
           };
         } else {
@@ -250,7 +485,8 @@ const ChatbotPage: React.FC = () => {
             data: data.data.data,
             explanation: data.data.explanation,
             summary: data.data.summary,
-            columns: data.data.columns
+            columns: data.data.columns,
+            suggestions: generateRandomSuggestions(3)
           };
         }
       } else {
@@ -263,7 +499,8 @@ const ChatbotPage: React.FC = () => {
           timestamp: new Date(),
           type: fallbackMessage.type,
           data: fallbackMessage.data,
-          columns: fallbackMessage.columns
+          columns: fallbackMessage.columns,
+          suggestions: generateRandomSuggestions(3)
         };
       }
 
@@ -292,7 +529,8 @@ const ChatbotPage: React.FC = () => {
           text: staticAnswer,
           sender: 'bot',
           timestamp: new Date(),
-          type: 'text'
+          type: 'text',
+          suggestions: generateRandomSuggestions(3)
         };
       } else {
         // Utiliser le fallback intelligent avec données
@@ -304,7 +542,8 @@ const ChatbotPage: React.FC = () => {
           timestamp: new Date(),
           type: fallbackResponse.type,
           data: fallbackResponse.data,
-          columns: fallbackResponse.columns
+          columns: fallbackResponse.columns,
+          suggestions: generateRandomSuggestions(3)
         };
       }
 
